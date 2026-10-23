@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import logging
+import uuid
 from pathlib import Path
 
 from PIL import Image, ImageCms, ImageOps
@@ -54,7 +55,7 @@ def _photo_proxy(info: MediaInfo, cache: Path) -> Path:
         scale = min(1.0, cover, MAX_PHOTO_SIDE / max(w, h))
         if scale < 1.0:
             im = im.resize((round(w * scale), round(h * scale)), Image.Resampling.LANCZOS)
-        tmp = out.with_suffix(".tmp.jpg")
+        tmp = out.with_name(f"proxy.{uuid.uuid4().hex[:8]}.tmp.jpg")  # unique: no collisions
         im.save(tmp, "JPEG", quality=92, subsampling=0)
         _save_thumb(im, thumbnail_path(info, cache))
     tmp.replace(out)
@@ -119,7 +120,7 @@ def _video_proxy(info: MediaInfo, cache: Path) -> Path:
     out = d / "proxy.mp4"
     if out.exists():
         return out
-    tmp = d / "proxy.tmp.mp4"
+    tmp = d / f"proxy.{uuid.uuid4().hex[:8]}.tmp.mp4"  # unique: no collisions
     ffmpeg.run([
         *ffmpeg.inp(info.path),
         "-map", "0:v:0", "-map", "0:a:0?",

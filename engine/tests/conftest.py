@@ -101,7 +101,7 @@ def _has_encoder(name: str) -> bool:
 
 
 def _photo(path: Path, size: tuple[int, int], hue: int, seed: int, blur: float = 0.0,
-           fmt: str = "JPEG") -> None:
+           fmt: str = "JPEG", quality: int = 90) -> None:
     rng = np.random.default_rng(seed)
     im = Image.new("RGB", size, (hue, 120, 255 - hue))
     d = ImageDraw.Draw(im)
@@ -116,7 +116,7 @@ def _photo(path: Path, size: tuple[int, int], hue: int, seed: int, blur: float =
         import pillow_heif
         pillow_heif.from_pillow(im).save(path, quality=85)
     else:
-        im.save(path, fmt, quality=90)
+        im.save(path, fmt, quality=quality)
 
 
 @pytest.fixture(scope="session")
@@ -125,7 +125,9 @@ def media_dir(tmp_path_factory) -> Path:
         pytest.skip("ffmpeg/ffprobe not available")
     d = tmp_path_factory.mktemp("media")
     _photo(d / "01_beach.jpg", (1080, 1440), 40, 1)
-    _photo(d / "02_beach_again.jpg", (1080, 1440), 40, 1)  # exact duplicate content
+    # Same picture saved at another quality: different bytes, near-identical look.
+    _photo(d / "02_beach_again.jpg", (1080, 1440), 40, 1, quality=70)
+    (d / "12_exact_copy.jpg").write_bytes((d / "01_beach.jpg").read_bytes())
     _photo(d / "03_group_landscape.jpg", (2000, 1300), 200, 3)
     _photo(d / "04_iphone.heic", (1200, 1600), 120, 4, fmt="HEIF")
     _photo(d / "05_blurry.jpg", (1080, 1440), 90, 5, blur=12)

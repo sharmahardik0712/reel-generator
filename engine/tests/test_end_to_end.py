@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from reel_engine import ffmpeg
-from reel_engine.analysis import read_frames
+from reel_engine.analysis import hamming, read_frames
 from reel_engine.pipeline import list_media, make_variants, prepare
 from reel_engine.probe import probe_file
 
@@ -37,6 +37,8 @@ def test_prepare_skips_bad_files_and_keeps_good_ones(prepared):
     assert {"01_beach.jpg", "04_iphone.heic", "06_portrait.mp4", "08_rotated.mp4"} <= names
     assert "10_notes.txt" not in names  # filtered by extension
     assert any("11_corrupt.jpg" in s for s in p.skipped)
+    assert "12_exact_copy.jpg" not in names
+    assert any("12_exact_copy.jpg: same file as 01_beach.jpg" in s for s in p.skipped)
 
 
 def test_hdr_proxy_is_tone_mapped(prepared):
@@ -58,7 +60,7 @@ def test_duplicate_photos_share_a_hash(prepared):
     p, _ = prepared
     by_name = {a.info.path.replace("\\", "/").rsplit("/", 1)[-1]: a for a in p.assets}
     a, b = by_name["01_beach.jpg"], by_name["02_beach_again.jpg"]
-    assert a.analysis.phash == b.analysis.phash
+    assert hamming(a.analysis.phash, b.analysis.phash) <= 10  # counts as a near-duplicate
     assert by_name["05_blurry.jpg"].analysis.sharpness < a.analysis.sharpness
 
 

@@ -7,6 +7,7 @@ what a shot means to the family, so they rank shots and never delete them.
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -59,7 +60,9 @@ def analyze(info: MediaInfo, proxy: Path, cache: Path) -> Analysis:
         if data.get("version") == ANALYSIS_VERSION:
             return Analysis(**data)
     result = _analyze_photo(proxy) if info.kind == "photo" else _analyze_video(info, proxy)
-    out.write_text(result.to_json())
+    tmp = out.with_name(f"analysis.{uuid.uuid4().hex[:8]}.tmp")
+    tmp.write_text(result.to_json())
+    tmp.replace(out)
     return result
 
 

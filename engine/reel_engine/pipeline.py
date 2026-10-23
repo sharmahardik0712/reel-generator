@@ -67,6 +67,12 @@ def prepare(files: list[Path], cache: Path, workers: int | None = None,
         if info.kind == "audio":
             skipped.append(f"{f.name}: audio files go in --song, skipped")
             continue
+        # The same file twice (byte for byte) is never wanted, and the copies would
+        # share one cache entry.
+        first = next((x for x in infos if x.content_hash == info.content_hash), None)
+        if first:
+            skipped.append(f"{f.name}: same file as {Path(first.path).name}")
+            continue
         infos.append(info)
     video_total = sum(i.duration for i in infos if i.kind == "video")
     if video_total > MAX_TOTAL_VIDEO_SECONDS:

@@ -694,8 +694,10 @@ def _run(store: Store, job: Job) -> None:
     names = {f["stored"]: f["name"] for f in m["files"]}
     skipped = []
     for s in prepared.skipped:
-        stored = s.split(":", 1)[0].split(" ", 1)[0]
-        skipped.append(s.replace(stored, names.get(stored, stored), 1))
+        # Show the user's own file names, e.g. "IMG_2.jpg: same file as IMG_1.jpg".
+        for stored, shown in names.items():
+            s = s.replace(stored, shown)
+        skipped.append(s)
     if not prepared.assets:
         raise ValueError("none of the files could be used: " + "; ".join(skipped))
 
