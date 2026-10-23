@@ -132,3 +132,51 @@ def test_expired_results_are_deleted(tmp_path):
     os.utime(orphan, (old, old))
     store.cleanup()
     assert not draft.exists() and not orphan.exists()
+
+
+def test_chunked_upload_any_order_and_retry(client, monkeypatch):
+    from reel_engine import webapp
+    monkeypatch.setattr(webapp, "UPLOAD_CHUNK_BYTES", 10)
+    pid = client.post("/api/projects").json()["id"]
+    data = bytes(range(256)) * 1  # 256 bytes -> 26 chunks of 10
+    init = client.post(f"/api/projects/{pid}/uploads", json={"name": "clip.MOV", "size": len(data)}).json()
+    assert init["chunks"] == 26
+    url = f"/api/projects/{pid}/uploads/{init['upload_id']}"
+    order = list(range(26))[::-1]
+    for i in order:
+        assert client.put(f"{url}/{i}", content=data[i * 10:(i + 1) * 10]).status_code == 200
+    assert client.put(f"{url}/3", content=data[30:40]).status_code == 200  # a retry is harmless
+    assert client.put(f"{url}/0", content=b"short").status_code == 400
+    assert client.put(f"{url}/99", content=b"x").status_code == 400
+    entry = client.post(f"{url}/complete").json()
+    assert entry["name"] == "clip.MOV" and entry["size"] == 256
+    stored = client.app.state.store.project_dir(pid) / "media" / entry["stored"]
+    assert stored.read_bytes() == data
+
+
+def test_incomplete_upload_is_refused(client):
+    pid = client.post("/api/projects").json()["id"]
+    init = client.post(f"/api/projects/{pid}/uploads", json={"name": "a.jpg", "size": 5}).json()
+    r = client.post(f"/api/projects/{pid}/uploads/{init['upload_id']}/complete")
+    assert r.status_code == 400 and "missing" in r.json()["detail"]
+    assert client.post(f"/api/projects/{pid}/render", json={"length": 7}).status_code == 409
+    assert client.post(f"/api/projects/{pid}/uploads", json={"name": "a.exe", "size": 5}).status_code == 415
+    assert client.post(f"/api/projects/{pid}/uploads",
+                       json={"name": "a.mp4", "size": 600 * 2**20}).status_code == 413
+
+
+def test_visitor_limits_use_worker_header_only_with_secret(client, monkeypatch):
+    from reel_engine import webapp
+    monkeypatch.setattr(webapp, "LIMITS", {**webapp.LIMITS, "project": (2, 3600)})
+    monkeypatch.setenv("REEL_PROXY_SECRET", "s3cret")
+    good = {"x-reel-proxy-secret": "s3cret"}
+    for _ in range(2):
+        assert client.post("/api/projects", headers={**good, "x-reel-client-ip": "1.1.1.1"}).status_code == 200
+    r = client.post("/api/projects", headers={**good, "x-reel-client-ip": "1.1.1.1"})
+    assert r.status_code == 429
+    # A different visitor is unaffected...
+    assert client.post("/api/projects", headers={**good, "x-reel-client-ip": "2.2.2.2"}).status_code == 200
+    # ...and a spoofed header without the secret is ignored (falls back to the socket address).
+    for _ in range(2):
+        client.post("/api/projects", headers={"x-reel-client-ip": "3.3.3.3"})
+    assert client.post("/api/projects", headers={"x-reel-client-ip": "4.4.4.4"}).status_code == 429

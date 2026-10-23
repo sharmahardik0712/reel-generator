@@ -1,0 +1,12 @@
+{
+	"name": "reel-worker",
+	"private": true,
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"check": "wrangler deploy --dry-run --outdir dist",
+		"types": "wrangler types"
+	},
+	"devDependencies": {
+		"wrangler": "^4.40.0"
+	}
+}

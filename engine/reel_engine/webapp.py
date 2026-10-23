@@ -14,8 +14,11 @@ One render runs at a time; others wait in a queue.
 
 from __future__ import annotations
 
+import collections
+import hmac
 import json
 import logging
+import os
 import queue
 import re
 import shutil
@@ -43,7 +46,17 @@ WORK_TTL_HOURS = 6  # orphaned work dirs (e.g. after a crash)
 CLEANUP_EVERY_SECONDS = 5 * 60  # expired reels already answer 410; this frees disk
 MAX_UPLOAD_BYTES = 500 * 1024 * 1024
 MAX_PROJECT_BYTES = 3 * 1024 * 1024 * 1024
+MAX_SONG_BYTES = 50 * 1024 * 1024
 CHUNK = 1024 * 1024
+# Uploads arrive in pieces so no single request exceeds Cloudflare's 100 MB limit.
+UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
+MIN_FREE_DISK_BYTES = 3 * 1024 ** 3
+
+# Per-visitor limits: the public site has no login, so keep strangers from tying up
+# this PC. A visitor is the client IP the Cloudflare Worker reports (see client_id).
+LIMITS = {"render": (6, 3600), "project": (30, 3600), "upload": (400, 3600)}
+MAX_QUEUED_JOBS = 8
+PROXY_SECRET_ENV = "REEL_PROXY_SECRET"
 MEDIA_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".mp4", ".mov", ".m4v"}
 AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".wav"}
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -82,6 +95,9 @@ class Store:
             d.mkdir(parents=True, exist_ok=True)
         self.result_ttl = result_ttl_hours * 3600
         self.jobs: dict[str, Job] = {}
+        self.uploads: dict[str, dict] = {}  # in-progress chunked uploads
+        self.hits: dict[tuple[str, str], collections.deque] = {}
+        self.project_locks: dict[str, threading.Lock] = collections.defaultdict(threading.Lock)
         self.lock = threading.Lock()
         self.queue: queue.Queue[str] = queue.Queue()
 
@@ -113,6 +129,19 @@ class Store:
             {"id": pid, "created_at": time.time(), "files": [], "song": None, "next": 0}))
         return pid
 
+    def allow(self, client: str, action: str) -> None:
+        """Sliding-window rate limit; raises 429 when the visitor is over the limit."""
+        count, window = LIMITS[action]
+        now = time.time()
+        with self.lock:
+            q = self.hits.setdefault((client, action), collections.deque())
+            while q and q[0] < now - window:
+                q.popleft()
+            if len(q) >= count:
+                wait = int(q[0] + window - now) // 60 + 1
+                raise HTTPException(429, f"Too many {action}s from you; try again in {wait} min.")
+            q.append(now)
+
     # jobs
     def save_job(self, job: Job) -> None:
         d = self.results / job.id
@@ -139,6 +168,12 @@ class Store:
 
     def cleanup(self) -> None:
         now = time.time()
+        with self.lock:
+            stale = [u for u, up in self.uploads.items() if now - up["started"] > 2 * 3600]
+        for uid in stale:
+            up = self.uploads.pop(uid, None)
+            if up:
+                (self.projects / up["pid"] / "media" / f"{uid}.part").unlink(missing_ok=True)
         busy = {j.id for j in self.jobs.values() if j.status not in ("done", "failed")}
         busy_projects = {self.jobs[j].project_id for j in busy if j in self.jobs}
         for d in self.projects.iterdir():
@@ -171,6 +206,11 @@ class TrackIn(BaseModel):
     preview_url: str = Field(max_length=1000)
     artwork_url: str = Field(default="", max_length=1000)
     duration_seconds: float = 0
+
+
+class UploadIn(BaseModel):
+    name: str = Field(max_length=300)
+    size: int = Field(gt=0)
 
 
 class RenderIn(BaseModel):
@@ -206,7 +246,7 @@ def create_app(data: Path, result_ttl_hours: float = RESULT_TTL_HOURS) -> FastAP
 
     @app.get("/api/config")
     def config() -> dict:
-        return {"presets": PRESETS, "max_files": MAX_FILES,
+        return {"presets": PRESETS, "max_files": MAX_FILES, "chunk_bytes": UPLOAD_CHUNK_BYTES,
                 "max_upload_mb": MAX_UPLOAD_BYTES // 2**20,
                 "media_exts": sorted(MEDIA_EXTS), "audio_exts": sorted(AUDIO_EXTS)}
 
@@ -222,7 +262,8 @@ def create_app(data: Path, result_ttl_hours: float = RESULT_TTL_HOURS) -> FastAP
             raise HTTPException(502, f"song search failed: {e}") from e
 
     @app.post("/api/projects")
-    def create_project() -> dict:
+    def create_project(request: Request) -> dict:
+        store.allow(client_id(request), "project")
         return {"id": store.create_project()}
 
     @app.get("/api/projects/{pid}")
@@ -230,8 +271,79 @@ def create_app(data: Path, result_ttl_hours: float = RESULT_TTL_HOURS) -> FastAP
         m = store.manifest(pid)
         return {"id": pid, "files": m["files"], "song": m["song"]}
 
+    @app.post("/api/projects/{pid}/uploads")
+    def start_upload(pid: str, body: UploadIn, request: Request) -> dict:
+        """Begin a chunked upload: the browser then PUTs UPLOAD_CHUNK_BYTES pieces."""
+        store.project_dir(pid)
+        store.allow(client_id(request), "upload")
+        ext = Path(body.name).suffix.lower()
+        if ext not in MEDIA_EXTS:
+            raise HTTPException(415, f"{body.name}: unsupported file type")
+        if body.size > MAX_UPLOAD_BYTES:
+            raise HTTPException(413, f"{body.name}: larger than {MAX_UPLOAD_BYTES // 2**20} MB")
+        if shutil.disk_usage(store.data).free < MIN_FREE_DISK_BYTES + body.size:
+            raise HTTPException(507, "the server is low on disk space; try again later")
+        with store.project_locks[pid]:
+            m = store.manifest(pid)
+            pending = [u for u in store.uploads.values() if u["pid"] == pid]
+            if len(m["files"]) + len(pending) >= MAX_FILES:
+                raise HTTPException(413, f"at most {MAX_FILES} files per reel")
+            used = sum(f["size"] for f in m["files"]) + sum(u["size"] for u in pending)
+            if used + body.size > MAX_PROJECT_BYTES:
+                raise HTTPException(413, f"at most {MAX_PROJECT_BYTES // 2**30} GB per reel")
+            uid = uuid.uuid4().hex
+            chunks = -(-body.size // UPLOAD_CHUNK_BYTES)
+            store.uploads[uid] = {"pid": pid, "name": _display_name(body.name), "ext": ext,
+                                  "size": body.size, "chunks": chunks, "received": set(),
+                                  "started": time.time()}
+            # Pre-size the file so chunks can land in any order.
+            with (store.project_dir(pid) / "media" / f"{uid}.part").open("wb") as f:
+                f.truncate(body.size)
+        return {"upload_id": uid, "chunk_size": UPLOAD_CHUNK_BYTES, "chunks": chunks}
+
+    @app.put("/api/projects/{pid}/uploads/{uid}/{index}")
+    async def upload_chunk(pid: str, uid: str, index: int, request: Request) -> dict:
+        up = _pending_upload(store, pid, uid)
+        if not 0 <= index < up["chunks"]:
+            raise HTTPException(400, "bad chunk number")
+        offset = index * UPLOAD_CHUNK_BYTES
+        expected = min(UPLOAD_CHUNK_BYTES, up["size"] - offset)
+        data = bytearray()
+        async for piece in request.stream():
+            data += piece
+            if len(data) > expected:
+                raise HTTPException(413, "chunk too large")
+        if len(data) != expected:
+            raise HTTPException(400, f"chunk {index} is {len(data)} bytes, expected {expected}")
+        part = store.project_dir(pid) / "media" / f"{uid}.part"
+        with part.open("r+b") as f:  # retries just overwrite the same bytes
+            f.seek(offset)
+            f.write(data)
+        up["received"].add(index)
+        return {"received": len(up["received"]), "chunks": up["chunks"]}
+
+    @app.post("/api/projects/{pid}/uploads/{uid}/complete")
+    def complete_upload(pid: str, uid: str) -> dict:
+        up = _pending_upload(store, pid, uid)
+        missing = up["chunks"] - len(up["received"])
+        if missing:
+            raise HTTPException(400, f"{missing} piece(s) still missing")
+        d = store.project_dir(pid)
+        with store.project_locks[pid]:
+            m = store.manifest(pid)
+            fid = uuid.uuid4().hex[:12]
+            stored = f"{m['next']:04d}_{fid}{up['ext']}"
+            (d / "media" / f"{uid}.part").replace(d / "media" / stored)
+            entry = {"id": fid, "name": up["name"], "stored": stored, "size": up["size"]}
+            m["files"].append(entry)
+            m["next"] += 1
+            store.save_manifest(pid, m)
+            store.uploads.pop(uid, None)
+        return entry
+
     @app.post("/api/projects/{pid}/files")
     async def upload_file(pid: str, file: UploadFile = File(...)) -> dict:
+        """Single-request upload (CLI/scripts). The web page uses chunked uploads."""
         d = store.project_dir(pid)
         ext = Path(file.filename or "").suffix.lower()
         if ext not in MEDIA_EXTS:
@@ -305,7 +417,7 @@ def create_app(data: Path, result_ttl_hours: float = RESULT_TTL_HOURS) -> FastAP
             raise HTTPException(415, "use an MP3, M4A, AAC or WAV file")
         _clear(d / "song")
         stored = f"song{ext}"
-        await _save_upload(file, d / "song" / stored, 100 * 1024 * 1024)
+        await _save_upload(file, d / "song" / stored, MAX_SONG_BYTES)
         m = store.manifest(pid)
         m["song"] = {"kind": "upload", "stored": stored, "title": _display_name(file.filename),
                      "artist": "", "artwork": ""}
@@ -322,8 +434,15 @@ def create_app(data: Path, result_ttl_hours: float = RESULT_TTL_HOURS) -> FastAP
         return {"ok": True}
 
     @app.post("/api/projects/{pid}/render")
-    def start_render(pid: str, body: RenderIn) -> dict:
+    def start_render(pid: str, body: RenderIn, request: Request) -> dict:
         store.project_dir(pid)
+        if any(u["pid"] == pid for u in store.uploads.values()):
+            raise HTTPException(409, "some files are still uploading")
+        with store.lock:
+            queued = sum(1 for j in store.jobs.values() if j.status == "queued")
+        if queued >= MAX_QUEUED_JOBS:
+            raise HTTPException(503, "Lots of reels are being made right now; try again in a few minutes.")
+        store.allow(client_id(request), "render")
         m = store.manifest(pid)
         if not m["files"]:
             raise HTTPException(400, "add some photos or videos first")
@@ -436,6 +555,27 @@ def _apply_order(store: Store, pid: str, order: list[str]) -> None:
     m["files"] = arranged
     m["next"] = len(arranged)
     store.save_manifest(pid, m)
+
+
+def client_id(request: Request) -> str:
+    """Who is this visitor? Behind the Cloudflare Worker every request comes from the
+    tunnel, so trust the Worker's X-Reel-Client-IP header, but only when it carries
+    the shared secret from REEL_PROXY_SECRET. Otherwise use the socket address."""
+    secret = os.environ.get(PROXY_SECRET_ENV, "")
+    sent = request.headers.get("x-reel-proxy-secret", "")
+    if secret and hmac.compare_digest(sent, secret):
+        ip = request.headers.get("x-reel-client-ip", "").strip()
+        if ip:
+            return ip[:64]
+    return request.client.host if request.client else "unknown"
+
+
+def _pending_upload(store: "Store", pid: str, uid: str) -> dict:
+    store.project_dir(pid)
+    up = store.uploads.get(uid) if ID_RE.match(uid) else None
+    if not up or up["pid"] != pid:
+        raise HTTPException(404, "upload not found; start it again")
+    return up
 
 
 def _page(name: str) -> str:

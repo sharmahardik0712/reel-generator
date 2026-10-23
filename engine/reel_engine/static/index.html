@@ -182,25 +182,48 @@
       uploadQueue.shift()().finally(() => { state.uploads--; pumpUploads(); updateGenerate(); });
     }
   }
-  function upload(pid, file, entry) {
-    return new Promise((resolve) => {
+  // Upload in pieces (each well under Cloudflare's 100 MB request limit), retrying
+  // a failed piece a few times so a flaky phone connection doesn't lose the file.
+  async function upload(pid, file, entry) {
+    const fail = (msg) => { entry.status = "error"; entry.error = msg; renderGrid(); };
+    let init;
+    try {
+      init = await api(`/api/projects/${pid}/uploads`, json({ name: file.name, size: file.size }));
+    } catch (err) { return fail(err.message); }
+    let last = 0;
+    for (let i = 0; i < init.chunks; i++) {
+      const piece = file.slice(i * init.chunk_size, Math.min(file.size, (i + 1) * init.chunk_size));
+      let ok = false, lastErr = "upload failed";
+      for (let attempt = 0; attempt < 4 && !ok; attempt++) {
+        if (attempt) await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
+        ok = await putChunk(`/api/projects/${pid}/uploads/${init.upload_id}/${i}`, piece, (sent) => {
+          entry.progress = (i * init.chunk_size + sent) / file.size;
+          if (Date.now() - last > 150) { last = Date.now(); renderGrid(); }
+        }).catch((e) => { lastErr = e.message; return false; });
+      }
+      if (!ok) return fail(lastErr);
+    }
+    try {
+      Object.assign(entry, await api(`/api/projects/${pid}/uploads/${init.upload_id}/complete`, { method: "POST" }),
+        { status: "done", progress: 1 });
+    } catch (err) { return fail(err.message); }
+    renderGrid();
+  }
+  function putChunk(url, blob, onProgress) {
+    return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      const form = new FormData();
-      form.append("file", file);
-      xhr.open("POST", `/api/projects/${pid}/files`);
-      let last = 0;
-      xhr.upload.onprogress = (e) => {
-        if (!e.lengthComputable) return;
-        entry.progress = e.loaded / e.total;
-        if (Date.now() - last > 150) { last = Date.now(); renderGrid(); }
-      };
+      xhr.open("PUT", url);
+      xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded);
       xhr.onload = () => {
-        if (xhr.status < 300) Object.assign(entry, JSON.parse(xhr.responseText), { status: "done", progress: 1 });
-        else { entry.status = "error"; try { entry.error = JSON.parse(xhr.responseText).detail; } catch { entry.error = "upload failed"; } }
-        renderGrid(); resolve();
+        if (xhr.status < 300) return resolve(true);
+        let msg = "upload failed";
+        try { msg = JSON.parse(xhr.responseText).detail || msg; } catch {}
+        // 4xx (other than 408/429) won't get better by retrying.
+        if (xhr.status >= 400 && xhr.status < 500 && ![408, 429].includes(xhr.status)) reject(new Error(msg));
+        else resolve(false);
       };
-      xhr.onerror = () => { entry.status = "error"; entry.error = "upload failed"; renderGrid(); resolve(); };
-      xhr.send(form);
+      xhr.onerror = () => resolve(false);
+      xhr.send(blob);
     });
   }
   async function removeFile(f) {

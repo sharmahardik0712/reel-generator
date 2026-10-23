@@ -10,3 +10,8 @@ __pycache__/
 .pytest_cache/
 reel-data/
 .claude/
+cloudflare/node_modules/
+cloudflare/dist/
+cloudflare/.wrangler/
+cloudflare/worker-configuration.d.ts
+.reel-secret

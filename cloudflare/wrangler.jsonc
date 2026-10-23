@@ -1,0 +1,16 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "reel",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-10-01",
+	// Served at https://reel.<your-subdomain>.workers.dev
+	"workers_dev": true,
+	"observability": { "enabled": true },
+	"vpc_services": [
+		{
+			"binding": "REEL_APP",
+			// From `npx wrangler vpc service create reel-app ...` (see DEPLOY.md)
+			"service_id": "REPLACE_WITH_VPC_SERVICE_ID"
+		}
+	]
+}
