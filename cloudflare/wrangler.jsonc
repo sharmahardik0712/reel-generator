@@ -5,12 +5,14 @@
 	"compatibility_date": "2026-10-01",
 	// Served at https://reel.<your-subdomain>.workers.dev
 	"workers_dev": true,
+	// No extra per-version public URLs: the one workers.dev address is enough.
+	"preview_urls": false,
 	"observability": { "enabled": true },
 	"vpc_services": [
 		{
 			"binding": "REEL_APP",
 			// From `npx wrangler vpc service create reel-app ...` (see DEPLOY.md)
-			"service_id": "REPLACE_WITH_VPC_SERVICE_ID"
+			"service_id": "01a168ea-0ae8-7201-93d8-4388fbc7b552"
 		}
 	]
 }

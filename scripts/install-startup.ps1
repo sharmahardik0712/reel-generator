@@ -7,13 +7,15 @@ $root = Split-Path -Parent $PSScriptRoot
 $secretFile = Join-Path $root ".reel-secret"
 if (-not (Test-Path $secretFile)) {
     $bytes = New-Object byte[] 32
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
+    # Create().GetBytes works on Windows PowerShell 5.1 and PowerShell 7 alike.
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
     ($bytes | ForEach-Object { $_.ToString("x2") }) -join "" | Set-Content $secretFile -NoNewline
     Write-Host "Created $secretFile (keep it private; it's in .gitignore)."
 }
 
 $script = Join-Path $PSScriptRoot "start-reel.ps1"
-$action = New-ScheduledTaskAction -Execute "powershell.exe" `
+$powershell = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+$action = New-ScheduledTaskAction -Execute $powershell -WorkingDirectory $root `
     -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script`""
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
