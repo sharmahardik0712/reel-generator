@@ -12,7 +12,7 @@
 		{
 			"binding": "REEL_APP",
 			// From `npx wrangler vpc service create reel-app ...` (see DEPLOY.md)
-			"service_id": "01a168ea-0ae8-7201-93d8-4388fbc7b552"
+			"service_id": "REPLACE_WITH_VPC_SERVICE_ID"
 		}
 	]
 }
