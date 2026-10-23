@@ -39,7 +39,7 @@ Storage is short-lived, the same way it will work on Cloudflare:
 - Drafts you never render are deleted after 24 hours. Cleanup runs at startup and
   every 5 minutes.
 
-To put it on the internet for free (workers.dev + Cloudflare Tunnel), see [DEPLOY.md](DEPLOY.md).
+To put it on the internet, see [DEPLOY.md](DEPLOY.md) (Cloudflare Containers, or free with your PC doing the rendering).
 
 To use it from phones on the same Wi-Fi: `reel ui --host 0.0.0.0`, then open
 `http://<this PC's IP>:8765` on the phone. Anyone on that Wi-Fi can reach it, and

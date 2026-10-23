@@ -1,9 +1,9 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "reel",
+	"name": "reel-home", // the free home-PC option; the container Worker owns "reel"
 	"main": "src/index.ts",
 	"compatibility_date": "2026-10-01",
-	// Served at https://reel.<your-subdomain>.workers.dev
+	// Served at https://reel-home.<your-subdomain>.workers.dev
 	"workers_dev": true,
 	// No extra per-version public URLs: the one workers.dev address is enough.
 	"preview_urls": false,

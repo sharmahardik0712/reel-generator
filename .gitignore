@@ -15,3 +15,7 @@ cloudflare/dist/
 cloudflare/.wrangler/
 cloudflare/worker-configuration.d.ts
 .reel-secret
+cloudflare-container/node_modules/
+cloudflare-container/dist/
+cloudflare-container/.wrangler/
+cloudflare-container/worker-configuration.d.ts

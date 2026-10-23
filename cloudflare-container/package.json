@@ -1,0 +1,14 @@
+{
+	"name": "reel-container",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"check": "wrangler deploy --dry-run --outdir dist",
+		"types": "wrangler types"
+	},
+	"devDependencies": {
+		"typescript": "^5.9.3",
+		"wrangler": "^4.152.0"
+	}
+}
