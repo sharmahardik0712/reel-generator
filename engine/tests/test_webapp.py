@@ -180,3 +180,19 @@ def test_visitor_limits_use_worker_header_only_with_secret(client, monkeypatch):
     for _ in range(2):
         client.post("/api/projects", headers={"x-reel-client-ip": "3.3.3.3"})
     assert client.post("/api/projects", headers={"x-reel-client-ip": "4.4.4.4"}).status_code == 429
+
+
+@pytest.mark.parametrize("kind,asked,expected", [
+    ("preview", 60, 30),  # searched songs can't make 60 s reels
+    ("preview", 7, 7),    # ...but shorter is fine
+    ("upload", 60, 60),   # uploaded audio keeps the chosen length
+])
+def test_reel_length_depends_on_song_source(client, kind, asked, expected):
+    pid = client.post("/api/projects").json()["id"]
+    client.post(f"/api/projects/{pid}/files", files={"file": ("a.jpg", b"\xff\xd8 junk", "image/jpeg")})
+    store = client.app.state.store
+    m = store.manifest(pid)
+    m["song"] = {"kind": kind, "stored": "song.m4a", "title": "t", "artist": "a", "artwork": ""}
+    store.save_manifest(pid, m)
+    jid = client.post(f"/api/projects/{pid}/render", json={"length": asked}).json()["job_id"]
+    assert client.get(f"/api/jobs/{jid}").json()["length"] == expected

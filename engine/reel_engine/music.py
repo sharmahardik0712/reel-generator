@@ -170,7 +170,9 @@ def plan_music(m: MusicAnalysis, target: float, start: float | None = None) -> M
 def _best_start(m: MusicAnalysis, beats: np.ndarray, energy: np.ndarray, target: float) -> float:
     downs = [d for d in m.downbeats if d + target <= m.duration + 0.05]
     if not downs:
-        return float(m.downbeats[0]) if m.downbeats and m.downbeats[0] < 2.0 else 0.0
+        # The song is about as long as the reel (e.g. a 30 s preview for a 30 s reel):
+        # use all of it rather than waiting for the first bar line.
+        return 0.0
     best, best_score = downs[0], -1e9
     for d in downs:
         inside = energy[(beats >= d) & (beats < d + target)]

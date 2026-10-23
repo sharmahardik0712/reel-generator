@@ -62,6 +62,8 @@ AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".wav"}
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
 PRESETS = [k for k in presets() if k != "selection"]
 DEFAULT_PRESETS = ["cinematic"]
+# Songs found by search / YouTube link are ~30 s previews, so those reels max out at 30 s.
+PREVIEW_MAX_SECONDS = 30
 
 
 # --- state ------------------------------------------------------------------------
@@ -452,7 +454,9 @@ def create_app(data: Path, result_ttl_hours: float = RESULT_TTL_HOURS) -> FastAP
             raise HTTPException(400, "pick at least one style")
         if body.order:
             _apply_order(store, pid, body.order)
-        job = Job(uuid.uuid4().hex, pid, body.length, body.presets, body.seed)
+        song = m.get("song") or {}
+        length = min(body.length, PREVIEW_MAX_SECONDS) if song.get("kind") == "preview" else body.length
+        job = Job(uuid.uuid4().hex, pid, length, body.presets, body.seed)
         with store.lock:
             store.jobs[job.id] = job
         store.queue.put(job.id)

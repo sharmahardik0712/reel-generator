@@ -35,3 +35,11 @@ def test_short_song_limits_length():
 def test_format_timestamp():
     assert format_timestamp(42.4) == "0:42"
     assert format_timestamp(75) == "1:15"
+
+
+def test_song_as_long_as_reel_uses_all_of_it():
+    # A 30 s preview for a 30 s reel: start at 0:00, don't wait for the first bar.
+    m = analyze_signal(make_song(seconds=30, drop_at=0), SR)
+    plan = plan_music(m, target=30)
+    assert plan.start == 0.0
+    assert plan.length > 29.7

@@ -64,9 +64,13 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const DEFAULT_PRESETS = ["cinematic"];
+  // A song found by search / YouTube link is a ~30 s preview: those reels default to
+  // 30 s (the whole song), may be shorter, and can't be 60 s. Uploaded audio keeps
+  // the user's own length choice.
+  const PREVIEW_MAX = 30;
   const state = {
     project: null, config: null, files: [], song: null,
-    length: 15, presets: new Set(DEFAULT_PRESETS),
+    length: 15, previewLength: PREVIEW_MAX, presets: new Set(DEFAULT_PRESETS),
     uploads: 0,
   };
 
@@ -244,11 +248,14 @@
 
   // ---------- song ----------
   let previewAudio = null;
+  const isPreview = () => !!state.song && state.song.kind === "preview";
+  const reelLength = () => (isPreview() ? state.previewLength : state.length);
   function renderSong() {
+    renderSettings();
     const box = $("songChosen");
     show(box, !!state.song);
     show($("songPicker"), !state.song);
-    if (!state.song) return;
+    if (!state.song) return updateGenerate();
     const s = state.song;
     box.replaceChildren(
       s.artwork ? el("img", { src: s.artwork, alt: "" }) : el("div", { class: "logo", "aria-hidden": "true" }, "♪"),
@@ -300,6 +307,7 @@
         if (previewAudio) previewAudio.pause();
         const pid = await ensureProject();
         state.song = await api(`/api/projects/${pid}/song/preview`, json(t));
+        state.previewLength = PREVIEW_MAX;
         $("tracks").replaceChildren();
         renderSong();
       } catch (err) { songError(err.message); use.disabled = false; use.textContent = "Use"; }
@@ -323,16 +331,25 @@
   };
 
   // ---------- settings ----------
-  function chips(container, options, isOn, onToggle) {
+  function chips(container, options, isOn, onToggle, isDisabled = () => false) {
     container.replaceChildren(...options.map(([value, label]) => {
-      const b = el("button", { type: "button", class: "chip", "aria-pressed": String(isOn(value)) }, label);
-      b.onclick = () => { onToggle(value); chips(container, options, isOn, onToggle); updateGenerate(); };
+      const b = el("button", { type: "button", class: "chip", "aria-pressed": String(isOn(value)),
+        disabled: isDisabled(value) ? "" : null }, label);
+      b.onclick = () => { onToggle(value); chips(container, options, isOn, onToggle, isDisabled); updateGenerate(); };
       return b;
     }));
   }
   function renderSettings() {
+    if (!state.config) return;
+    // With a searched song the pick goes to previewLength, so the user's own length
+    // (state.length) comes back if they switch to an uploaded file or no song.
     chips($("lengthChips"), [[7, "7 s"], [15, "15 s"], [30, "30 s"], [60, "60 s"]],
-      (v) => state.length === v, (v) => { state.length = v; storeSet("reel.length", v); });
+      (v) => reelLength() === v,
+      (v) => {
+        if (isPreview()) state.previewLength = v;
+        else { state.length = v; storeSet("reel.length", v); }
+      },
+      (v) => isPreview() && v > PREVIEW_MAX);
     chips($("presetChips"), state.config.presets.map((p) => [p, p[0].toUpperCase() + p.slice(1)]),
       (v) => state.presets.has(v),
       (v) => { state.presets.has(v) ? state.presets.delete(v) : state.presets.add(v); storeSet("reel.styles", [...state.presets].join(",")); });
@@ -343,9 +360,9 @@
     const btn = $("generateBtn");
     btn.disabled = !done || busy || !state.presets.size;
     btn.textContent = busy ? "Uploading…" : done ? `Make my reels (${done} file${done > 1 ? "s" : ""})` : "Add photos or videos to start";
-    const warn = state.song && state.song.kind === "preview" && state.length > 30
-      ? "Song previews are 30 s, so 60 s reels need an uploaded audio file." : "";
-    $("lengthWarn").textContent = warn;
+    $("lengthWarn").textContent = isPreview()
+      ? "Searched songs are 30 s previews: 30 s uses the whole song. For 60 s, upload an audio file."
+      : "";
   }
 
   // ---------- generate ----------
@@ -358,7 +375,7 @@
       const pid = await ensureProject();
       const order = state.files.filter((f) => f.status === "done").map((f) => f.id);
       const { job_id } = await api(`/api/projects/${pid}/render`,
-        json({ length: state.length, presets: [...state.presets], seed: 0, order }));
+        json({ length: reelLength(), presets: [...state.presets], seed: 0, order }));
       // The uploads are deleted once the reels are made; remember the project only
       // until then, so the result page can send the user back if rendering fails.
       storeSet("reel.project", null);
