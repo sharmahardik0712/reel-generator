@@ -61,6 +61,7 @@ MEDIA_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".mp4", ".mov"
 AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".wav"}
 ID_RE = re.compile(r"^[0-9a-f]{32}$")
 PRESETS = [k for k in presets() if k != "selection"]
+DEFAULT_PRESETS = ["cinematic"]
 
 
 # --- state ------------------------------------------------------------------------
@@ -215,7 +216,7 @@ class UploadIn(BaseModel):
 
 class RenderIn(BaseModel):
     length: float = Field(default=15, ge=5, le=60)
-    presets: list[str] = Field(default_factory=lambda: list(PRESETS))
+    presets: list[str] = Field(default_factory=lambda: list(DEFAULT_PRESETS))
     seed: int = Field(default=0, ge=0, le=2**31)
     order: list[str] | None = None  # file ids in the order the user arranged them
 

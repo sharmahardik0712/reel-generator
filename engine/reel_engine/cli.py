@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
                       help="YouTube link or song name; uses the top match's preview")
     m.add_argument("--length", type=float, default=15.0, help="target seconds (default 15)")
     preset_names = [k for k in presets() if k != "selection"]
-    m.add_argument("--preset", default="hype", choices=[*preset_names, "all"])
+    m.add_argument("--preset", default="cinematic", choices=[*preset_names, "all"])
     m.add_argument("--seed", type=int, default=0, help="change for a different variation")
     m.add_argument("--music-start", type=float, help="force the song start (seconds)")
     m.add_argument("--out", type=Path, default=Path("out"))

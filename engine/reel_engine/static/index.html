@@ -50,7 +50,7 @@
     <h2><span class="n">3</span> Style</h2>
     <div class="label">Length</div>
     <div class="chips" id="lengthChips"></div>
-    <div class="label">Styles to make</div>
+    <div class="label">Styles to make (pick one or more)</div>
     <div class="chips" id="presetChips"></div>
     <p class="muted" id="lengthWarn"></p>
   </section>
@@ -63,9 +63,10 @@
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
+  const DEFAULT_PRESETS = ["cinematic"];
   const state = {
     project: null, config: null, files: [], song: null,
-    length: 15, presets: new Set(["hype", "smooth", "cinematic"]),
+    length: 15, presets: new Set(DEFAULT_PRESETS),
     uploads: 0,
   };
 
@@ -334,7 +335,7 @@
       (v) => state.length === v, (v) => { state.length = v; storeSet("reel.length", v); });
     chips($("presetChips"), state.config.presets.map((p) => [p, p[0].toUpperCase() + p.slice(1)]),
       (v) => state.presets.has(v),
-      (v) => { state.presets.has(v) ? state.presets.delete(v) : state.presets.add(v); storeSet("reel.presets", [...state.presets].join(",")); });
+      (v) => { state.presets.has(v) ? state.presets.delete(v) : state.presets.add(v); storeSet("reel.styles", [...state.presets].join(",")); });
   }
   function updateGenerate() {
     const done = state.files.filter((f) => f.status === "done").length;
@@ -374,9 +375,10 @@
   (async () => {
     state.config = await api("/api/config");
     const len = Number(storeGet("reel.length")); if ([7, 15, 30, 60].includes(len)) state.length = len;
-    const pr = storeGet("reel.presets");
+    // "reel.styles" replaced "reel.presets" when the default became Cinematic only.
+    const pr = storeGet("reel.styles");
     if (pr) state.presets = new Set(pr.split(",").filter((p) => state.config.presets.includes(p)));
-    if (!state.presets.size) state.presets = new Set(state.config.presets);
+    if (!state.presets.size) state.presets = new Set(DEFAULT_PRESETS);
     renderSettings();
     const retry = new URLSearchParams(location.search).get("retry");
     if (retry && /^[0-9a-f]{32}$/.test(retry)) {
