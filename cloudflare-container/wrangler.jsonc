@@ -7,6 +7,12 @@
 	"compatibility_flags": ["nodejs_compat"],
 	"workers_dev": true,
 	"preview_urls": false,
+	// Cloudflare creates the DNS records and HTTPS certificates for these.
+	// www redirects to the bare domain in src/index.ts.
+	"routes": [
+		{ "pattern": "makemyreel.in", "custom_domain": true },
+		{ "pattern": "www.makemyreel.in", "custom_domain": true }
+	],
 	"observability": { "enabled": true },
 	"containers": [
 		{

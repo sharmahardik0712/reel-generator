@@ -5,8 +5,13 @@ Two ways to put Reel Maker online. **A** is the main one.
 ## A. Cloudflare Containers (Workers Paid, runs entirely on Cloudflare)
 
 ```
-Phone ──https──► reel.<you>.workers.dev ──► Worker ──► one container (Python + FFmpeg, 4 vCPU)
+Phone ──https──► makemyreel.in ──► Worker ──► one container (Python + FFmpeg, 4 vCPU)
 ```
+
+- **Address:** https://makemyreel.in. `www.makemyreel.in` redirects there, and the
+  `reel.<you>.workers.dev` address keeps working too. The domain is registered at
+  GoDaddy with its nameservers pointed at Cloudflare. The Custom Domains are declared
+  in `cloudflare-container/wrangler.jsonc`, so Cloudflare manages DNS and HTTPS.
 
 - Needs the **Workers Paid** plan ($5/month). Usage beyond the included amount is
   billed by Cloudflare; see "Cost" below.

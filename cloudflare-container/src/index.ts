@@ -97,8 +97,17 @@ export class ReelContainer extends DurableObject<Env> {
 	}
 }
 
+// The one canonical address; www.makemyreel.in redirects here.
+const CANONICAL_HOST = "makemyreel.in";
+
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
+		const url = new URL(request.url);
+		if (url.hostname === `www.${CANONICAL_HOST}`) {
+			url.hostname = CANONICAL_HOST;
+			return Response.redirect(url.toString(), 301);
+		}
+
 		const headers = new Headers(request.headers);
 		// Never let visitors supply these themselves.
 		for (const name of [...headers.keys()]) {
