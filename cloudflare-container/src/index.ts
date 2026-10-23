@@ -6,13 +6,13 @@
  *
  * There is exactly one container: uploads, the job queue and finished reels live on
  * its disk and in its memory. It sleeps after INACTIVITY_MINUTES without requests,
- * and sleeping wipes its disk, so that is set longer than the app's 1 hour reel TTL.
+ * and sleeping wipes its disk, so that is set longer than the app's 20 minute reel TTL.
  */
 import { DurableObject } from "cloudflare:workers";
 
 const PORT = 8080;
-// Reels stay downloadable for 1 hour; keep the container awake a little longer.
-const INACTIVITY_MINUTES = 70;
+// Reels stay downloadable for 20 minutes; keep the container awake a little longer.
+const INACTIVITY_MINUTES = 30;
 // 4 vCPU / 12 GiB / 20 GB disk: the largest predefined type, for fast renders.
 const INSTANCE = "standard-4";
 

@@ -81,7 +81,7 @@ def test_full_flow(client, media_dir, song_file):
     assert not (data / "work" / job_id).exists()
     assert sorted(p.name for p in (data / "results" / job_id).iterdir()) == [
         "hype-silent.mp4", "hype.mp4", "job.json", "smooth-silent.mp4", "smooth.mp4"]
-    assert time.time() + 50 * 60 < job["expires_at"] <= time.time() + 3600
+    assert time.time() + 15 * 60 < job["expires_at"] <= time.time() + 20 * 60
 
     # The result screen and its videos survive a server restart.
     restarted = TestClient(create_app(data))

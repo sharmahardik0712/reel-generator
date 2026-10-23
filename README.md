@@ -34,10 +34,10 @@ Storage is short-lived, the same way it will work on Cloudflare:
 - **Uploads and the song** (`reel-data/projects/`) are deleted as soon as the reels
   are made. If rendering fails they're kept, so you can go back and retry.
 - **Working files** (`reel-data/work/`) are deleted when each render ends.
-- **Finished reels** (`reel-data/results/`) stay downloadable for 1 hour (`--keep-hours N` to
+- **Finished reels** (`reel-data/results/`) stay downloadable for 20 minutes (`--keep-minutes N` to
   change), or until you press *Delete these reels now*.
 - Drafts you never render are deleted after 24 hours. Cleanup runs at startup and
-  every 5 minutes.
+  every 2 minutes.
 
 To put it on the internet, see [DEPLOY.md](DEPLOY.md) (Cloudflare Containers, or free with your PC doing the rendering).
 

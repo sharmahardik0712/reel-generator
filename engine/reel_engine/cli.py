@@ -53,8 +53,8 @@ def main(argv: list[str] | None = None) -> int:
     u.add_argument("--port", type=int, default=8765)
     u.add_argument("--data", type=Path, default=Path("reel-data"),
                    help="where uploads, cache and reels are kept")
-    u.add_argument("--keep-hours", type=float, default=1,
-                   help="how long finished reels stay downloadable (default 1)")
+    u.add_argument("--keep-minutes", type=float, default=20,
+                   help="how long finished reels stay downloadable (default 20)")
     u.add_argument("--no-browser", action="store_true")
 
     args = parser.parse_args(argv)
@@ -159,7 +159,7 @@ def cmd_ui(args) -> int:
     if busy == "other":
         raise ValueError(f"port {args.port} is used by another program; "
                          f"try `reel ui --port {args.port + 1}`")
-    app = create_app(args.data.resolve(), result_ttl_hours=args.keep_hours)
+    app = create_app(args.data.resolve(), result_ttl_minutes=args.keep_minutes)
     print(f"Reel Maker running at {url}  (Ctrl+C to stop)")
     if args.host == "0.0.0.0":
         print("Phones on the same Wi-Fi can open http://<this PC's IP>:" + str(args.port))

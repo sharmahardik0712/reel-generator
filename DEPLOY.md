@@ -12,9 +12,9 @@ Phone ──https──► reel.<you>.workers.dev ──► Worker ──► one
   billed by Cloudflare; see "Cost" below.
 - Your PC can be off. GitHub Actions builds and deploys on every push to `main`.
 - Same app, same limits: anyone with the link can use it, 6 renders/hour per visitor,
-  at most 8 renders waiting. Uploads are deleted after rendering, reels after 1 hour.
+  at most 8 renders waiting. Uploads are deleted after rendering, reels after 20 minutes.
 - **One container holds everything** (uploads, the queue, reels). It sleeps after
-  70 minutes with no visitors, and **sleeping wipes its disk**, so a reel can't
+  30 minutes with no visitors, and **sleeping wipes its disk**, so a reel can't
   outlive that. The first visit after a sleep shows "Reel Maker is starting" for
   up to a minute while it wakes. Cloudflare may also restart a container at any
   time; a render in progress would then fail and need starting again.
@@ -41,7 +41,7 @@ Phone ──https──► reel.<you>.workers.dev ──► Worker ──► one
 Workers Paid includes 25 GiB-hours of memory, 375 vCPU-minutes and 200 GB-hours of
 disk per month. The `standard-4` container reserves 12 GiB and 20 GB while awake,
 so every hour it's awake uses about 12 GiB-hours. Each visit keeps it awake for at
-least 70 minutes, so roughly 2 visits a month fit in the included memory, and each
+least 30 minutes, so roughly 4 visits a month fit in the included memory, and each
 extra awake hour costs about $0.11 (memory) + $0.005 (disk), plus CPU while rendering
 (about 1–2 cents a reel). For example, 30 awake hours a month is roughly $3 on top
 of the $5 plan. To cut cost, lower `INACTIVITY_MINUTES` (reels then disappear sooner

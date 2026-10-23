@@ -7,7 +7,7 @@ ephemeral container):
   Deleted as soon as a render succeeds; abandoned drafts after PROJECT_TTL_HOURS.
 - <data>/work/<job>/     proxies, analysis, per-clip renders. Deleted when the job ends.
 - <data>/results/<job>/  the finished MP4s and job.json, shown at /r/<job>.
-  Deleted after the result TTL (default 1 h) or when the user deletes them.
+  Deleted after the result TTL (default 20 min) or when the user deletes them.
 
 One render runs at a time; others wait in a queue.
 """
@@ -41,9 +41,9 @@ from .planner import presets
 log = logging.getLogger(__name__)
 
 PROJECT_TTL_HOURS = 24
-RESULT_TTL_HOURS = 1
+RESULT_TTL_MINUTES = 20
 WORK_TTL_HOURS = 6  # orphaned work dirs (e.g. after a crash)
-CLEANUP_EVERY_SECONDS = 5 * 60  # expired reels already answer 410; this frees disk
+CLEANUP_EVERY_SECONDS = 2 * 60  # expired reels already answer 410; this frees disk
 MAX_UPLOAD_BYTES = 500 * 1024 * 1024
 MAX_PROJECT_BYTES = 3 * 1024 * 1024 * 1024
 MAX_SONG_BYTES = 50 * 1024 * 1024
@@ -92,14 +92,14 @@ class Job:
 
 
 class Store:
-    def __init__(self, data: Path, result_ttl_hours: float = RESULT_TTL_HOURS):
+    def __init__(self, data: Path, result_ttl_minutes: float = RESULT_TTL_MINUTES):
         self.data = data
         self.projects = data / "projects"
         self.work = data / "work"
         self.results = data / "results"
         for d in (self.projects, self.work, self.results):
             d.mkdir(parents=True, exist_ok=True)
-        self.result_ttl = result_ttl_hours * 3600
+        self.result_ttl = result_ttl_minutes * 60
         self.jobs: dict[str, Job] = {}
         self.uploads: dict[str, dict] = {}  # in-progress chunked uploads
         self.hits: dict[tuple[str, str], collections.deque] = {}
@@ -228,8 +228,8 @@ class RenderIn(BaseModel):
 
 # --- app --------------------------------------------------------------------------
 
-def create_app(data: Path, result_ttl_hours: float = RESULT_TTL_HOURS) -> FastAPI:
-    store = Store(data, result_ttl_hours)
+def create_app(data: Path, result_ttl_minutes: float = RESULT_TTL_MINUTES) -> FastAPI:
+    store = Store(data, result_ttl_minutes)
     store.cleanup()
     app = FastAPI(title="Reel Generator", docs_url=None, redoc_url=None)
     app.state.store = store

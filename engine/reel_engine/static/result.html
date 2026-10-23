@@ -131,7 +131,7 @@
     const tick = () => {
       if (job.expires_at * 1000 <= Date.now()) {
         clearInterval(countdown);
-        return gone("These reels have expired", "Reels are deleted an hour after they're made, to keep your photos private.");
+        return gone("These reels have expired", "Reels are deleted 20 minutes after they're made, to keep your photos private.");
       }
       $("expiry").replaceChildren("⏳ ", `Download within ${timeLeft(job.expires_at)}; then they're deleted. Your uploads are already deleted.`);
     };

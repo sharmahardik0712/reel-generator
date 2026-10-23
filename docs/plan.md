@@ -29,7 +29,7 @@ A private website, hosted on Cloudflare, where family members upload photos and 
 8. **Share** straight to Instagram/Photos via the phone's share sheet, or download.
    - **With-music** MP4, for preview or other platforms.
    - **Silent, beat-synced** MP4 plus an instruction such as "add *Song X* in Instagram starting at 0:42", so the reel uses Instagram's licensed audio and isn't muted.
-9. Tapping Generate opens a separate **result screen** (`/r/<job>`): live progress, then the reels with Download / Silent / Share. As soon as the render succeeds, **all uploaded media, the song and working files are deleted**; only the finished MP4s remain, for **1 hour** (or until the user taps *Delete these reels now*). If a render fails, the uploads are kept so the user can go back and retry.
+9. Tapping Generate opens a separate **result screen** (`/r/<job>`): live progress, then the reels with Download / Silent / Share. As soon as the render succeeds, **all uploaded media, the song and working files are deleted**; only the finished MP4s remain, for **20 minutes** (or until the user taps *Delete these reels now*). If a render fails, the uploads are kept so the user can go back and retry.
 
 ### Success criteria
 
@@ -370,9 +370,9 @@ Small trusted audience, but these are family photos:
 - **R2 bucket private.** Only short-lived presigned URLs (about 15 minutes); random object keys.
 - **Retention (short-lived by design):**
   - Uploads, the song, proxies and analysis are deleted **immediately after a successful render** (the container also wipes its scratch disk after every job).
-  - Finished reels live under `results/<render>/` in R2 for **1 hour**, then are deleted; users can delete them sooner from the result screen. The result screen counts down and switches to "expired" by itself, and the Worker refuses downloads past `expires_at` (presigned URLs are issued for at most the remaining time).
+  - Finished reels live under `results/<render>/` in R2 for **20 minutes**, then are deleted; users can delete them sooner from the result screen. The result screen counts down and switches to "expired" by itself, and the Worker refuses downloads past `expires_at` (presigned URLs are issued for at most the remaining time).
   - Abandoned drafts (never rendered) are deleted after 24 hours; failed renders keep their uploads for the same 24 hours so the user can retry.
-  - Enforced twice: a **Cron Trigger every 5 minutes** deletes expired reels, drafts and D1 rows (R2 lifecycle rules only work in whole days, so they can't enforce 1 hour). An R2 lifecycle rule is the backstop: delete `uploads/` and `results/` objects older than 1 day and abort incomplete multipart uploads after 1 day.
+  - Enforced twice: a **Cron Trigger every 5 minutes** deletes expired reels, drafts and D1 rows (R2 lifecycle rules only work in whole days, so they can't enforce 20 minutes). An R2 lifecycle rule is the backstop: delete `uploads/` and `results/` objects older than 1 day and abort incomplete multipart uploads after 1 day.
 - **Limits** (protect cost and container disk): 60 files per project, 3 GB total, 500 MB per file, 10 minutes total video, 10 renders per user per day.
 - **Container hardening:** FFmpeg `-protocol_whitelist file,pipe`; Pillow decompression-bomb limit; per-job timeout; disk-space check before downloading; scratch wiped after every job.
 - **Secrets:** R2 S3 credentials and the internal job secret as Worker/Container secrets, never in the repository.
@@ -508,7 +508,7 @@ Pin the FFmpeg build (it must include `libzimg` for `zscale`, plus `libx264`) an
 | Instagram mutes reels with copyrighted music | Silent beat-synced export + Instagram start-time instruction |
 | Container cold starts / idle shutdown mid-job | Pre-warm on Create screen, `sleepAfter` ≈10 min, keep-alive during jobs, stage outputs cached in R2 so retries resume |
 | 20 GB container disk exceeded | Per-project size limits; process from proxies; stream downloads; disk check before jobs |
-| Costs creep up | `max_instances`, daily render cap per user, uploads deleted after rendering, 1 h reel retention, cost check monthly |
+| Costs creep up | `max_instances`, daily render cap per user, uploads deleted after rendering, 20 min reel retention, cost check monthly |
 | Rule-based editing lacks meaning | Strong hook, chronology, variety, energy matching; storyboard locks and Shuffle (before rendering) cover the rest |
 | Beat tracking wrong on some songs | Confidence score + fallback grid; show detected BPM so it's visible |
 | Bad crops of landscape footage | Saliency crop, blurred-background fill, optional face detection |
@@ -520,7 +520,7 @@ Pin the FFmpeg build (it must include `libzimg` for `zscale`, plus `libx264`) an
 - **Face-aware cropping:** is a small pretrained CNN face detector (OpenCV YuNet) acceptable under the "non-AI" rule? It noticeably improves crops of people.
 - **Full-length songs:** if 30 s previews feel limiting, add the optional home helper for full tracks; Access, R2, and the UI stay unchanged.
 - **Default preset:** Hype is the default; confirm after family usage.
-- **Retention:** reels 1 hour, uploads deleted right after rendering; revisit if family members want longer.
+- **Retention:** reels 20 minutes, uploads deleted right after rendering; revisit if family members want longer.
 - **Royalty-free library:** which sources (e.g. Pixabay Music, Free Music Archive), with license notes stored per track.
 - **Web Push notifications:** keep or drop based on how long renders actually take.
 
