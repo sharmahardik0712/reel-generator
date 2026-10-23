@@ -1,0 +1,12 @@
+.venv/
+tools/ffmpeg/
+.reel_cache/
+.demo/
+.pytest-tmp/
+out/
+songs/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+reel-data/
+.claude/

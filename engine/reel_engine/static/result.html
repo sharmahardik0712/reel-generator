@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Your Reels</title>
+<meta name="theme-color" content="#0f0f14">
+<meta name="robots" content="noindex">
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .stage { text-align: center; padding: 28px 18px; }
+  .stage h2 { justify-content: center; font-size: 18px; }
+  .expiry { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); margin: 0 0 16px; }
+  .result .row { flex-wrap: wrap; }
+  .result .row > * { flex: 1 1 auto; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+  .actions > * { flex: 1 1 160px; }
+  .danger { color: var(--err); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="logo" aria-hidden="true">▶</div>
+    <div>
+      <h1>Your reels</h1>
+      <p>Download them before they expire</p>
+    </div>
+  </header>
+
+  <section class="card stage" id="working">
+    <h2><span class="spinner"></span> <span id="workingTitle">Making your reels…</span></h2>
+    <div class="progress"><div id="progressBar"></div></div>
+    <p class="muted" id="progressMsg">Starting…</p>
+    <p class="muted" style="margin-top:14px">You can keep this page open; it updates by itself.</p>
+  </section>
+
+  <section class="card stage hidden" id="failed">
+    <h2>That didn't work</h2>
+    <p class="error" id="failMsg"></p>
+    <p class="muted">Your photos and videos are still uploaded, so you can change something and try again.</p>
+    <a class="btn primary" id="retryLink" href="/">← Back to edit</a>
+  </section>
+
+  <section class="card stage hidden" id="gone">
+    <h2 id="goneTitle">These reels are gone</h2>
+    <p class="muted" id="goneMsg">Reels are deleted after a while to keep your photos private.</p>
+    <a class="btn primary" href="/">Make a new reel</a>
+  </section>
+
+  <section class="card hidden" id="done">
+    <p class="expiry" id="expiry"></p>
+    <div class="results" id="results"></div>
+    <div class="hint hidden" id="hint"></div>
+    <ul class="notes" id="notes"></ul>
+    <div class="actions">
+      <a class="btn primary" href="/">＋ Make another reel</a>
+      <button type="button" class="danger" id="deleteBtn">Delete these reels now</button>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const jobId = location.pathname.split("/").pop();
+  const base = `/api/jobs/${jobId}`;
+  let timer = null;
+
+  function el(tag, attrs = {}, ...kids) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") e.className = v;
+      else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+      else if (v !== null && v !== undefined) e.setAttribute(k, v);
+    }
+    for (const k of kids) e.append(k);
+    return e;
+  }
+  function only(id) {
+    for (const s of ["working", "failed", "gone", "done"]) $(s).classList.toggle("hidden", s !== id);
+  }
+  function gone(title, msg) {
+    $("goneTitle").textContent = title;
+    if (msg) $("goneMsg").textContent = msg;
+    only("gone");
+  }
+  const videoUrl = (preset, variant, dl) => `${base}/video/${preset}/${variant}${dl ? "?dl=1" : ""}`;
+
+  function timeLeft(expiresAt) {
+    const mins = Math.max(0, Math.round((expiresAt * 1000 - Date.now()) / 60000));
+    if (mins >= 120) return `${Math.round(mins / 60)} hours`;
+    if (mins >= 60) return "1 hour";
+    if (mins < 1) return "a minute";
+    return `${mins} minute${mins === 1 ? "" : "s"}`;
+  }
+
+  async function poll() {
+    clearTimeout(timer);
+    let res;
+    try { res = await fetch(base); }
+    catch { $("progressMsg").textContent = "Lost contact with the server, retrying…"; timer = setTimeout(poll, 3000); return; }
+    if (res.status === 404) return gone("These reels are gone", "They were deleted, or the link is wrong.");
+    if (res.status === 410) return gone("These reels have expired", null);
+    const job = await res.json();
+    if (job.status === "done") return showDone(job);
+    if (job.status === "failed") {
+      $("failMsg").textContent = job.error || job.message;
+      $("retryLink").href = `/?retry=${job.project_id}`;
+      return only("failed");
+    }
+    only("working");
+    $("progressBar").style.width = `${Math.max(2, job.progress * 100)}%`;
+    $("progressMsg").textContent = job.status === "queued" && job.queue_position > 1
+      ? `Waiting in line (#${job.queue_position})…` : job.message;
+    timer = setTimeout(poll, document.hidden ? 5000 : 1500);
+  }
+
+  async function share(preset, variant) {
+    try {
+      const blob = await (await fetch(videoUrl(preset, variant))).blob();
+      const file = new File([blob], `reel-${preset}${variant === "silent" ? "-silent" : ""}.mp4`, { type: "video/mp4" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file] });
+      else location.href = videoUrl(preset, variant, true);
+    } catch (e) { if (e.name !== "AbortError") location.href = videoUrl(preset, variant, true); }
+  }
+
+  function showDone(job) {
+    only("done");
+    document.title = "Your reels are ready";
+    const tick = () => {
+      if (job.expires_at * 1000 <= Date.now()) {
+        clearInterval(countdown);
+        return gone("These reels have expired", "Reels are deleted an hour after they're made, to keep your photos private.");
+      }
+      $("expiry").replaceChildren("⏳ ", `Download within ${timeLeft(job.expires_at)}; then they're deleted. Your uploads are already deleted.`);
+    };
+    const countdown = setInterval(tick, 30000);
+    tick();
+    const canShare = !!(navigator.canShare && window.File);
+    $("results").replaceChildren(...job.results.map((r) => {
+      const variant = r.has_music ? "music" : "silent";
+      const actions = el("div", { class: "row" },
+        el("a", { class: "btn primary", href: videoUrl(r.preset, variant, true) }, "⬇ Download"));
+      if (r.has_music) {
+        actions.append(el("a", { class: "btn", href: videoUrl(r.preset, "silent", true),
+          title: "Post this one and add the song in Instagram" }, "⬇ Silent"));
+      }
+      if (canShare) actions.append(el("button", { type: "button", onclick: () => share(r.preset, "silent") }, "Share"));
+      return el("div", { class: "result" },
+        el("video", { src: videoUrl(r.preset, variant), controls: "", playsinline: "", loop: "", preload: "metadata" }),
+        el("h3", {}, r.preset),
+        el("div", { class: "muted" }, `${r.duration.toFixed(1)} s · ${r.shots} shots`),
+        actions);
+    }));
+    $("hint").classList.toggle("hidden", !job.hint);
+    $("hint").textContent = job.hint ? "📱 Posting tip: " + job.hint : "";
+    $("notes").replaceChildren(...job.notes.map((n) => el("li", {}, n)));
+  }
+
+  $("deleteBtn").onclick = async () => {
+    if (!confirm("Delete these reels now? Download any you want to keep first.")) return;
+    const res = await fetch(base, { method: "DELETE" });
+    if (res.ok) gone("Reels deleted", "Nothing from this reel is left on the server.");
+  };
+
+  poll();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,48 @@
+# Editing presets. Weights and pacing are tuned here, not in code.
+#
+# beats_per_shot: shot length in beats, chosen by the music energy (0..1) at the cut.
+#   high  -> energy >= 0.66, mid -> 0.33..0.66, low -> < 0.33
+# min_shot_seconds / max_shot_seconds clamp the beat-based length.
+# photo_zoom: Ken Burns zoom amount over a photo's shot (0.06 = 6%).
+# weights: candidate scoring weights (components are normalized to 0..1).
+
+hype:
+  beats_per_shot: {high: 1, mid: 2, low: 2}
+  min_shot_seconds: 0.35
+  max_shot_seconds: 2.0
+  photo_zoom: 0.08
+  landscape_mode: blur_fill
+  weights: {quality: 0.35, interest: 0.25, motion: 0.40}
+  hook_weights: {quality: 0.30, interest: 0.30, motion: 0.40}
+
+smooth:
+  beats_per_shot: {high: 2, mid: 2, low: 4}
+  min_shot_seconds: 0.6
+  max_shot_seconds: 3.0
+  photo_zoom: 0.06
+  landscape_mode: blur_fill
+  weights: {quality: 0.45, interest: 0.30, motion: 0.25}
+  hook_weights: {quality: 0.40, interest: 0.35, motion: 0.25}
+
+cinematic:
+  beats_per_shot: {high: 4, mid: 4, low: 8}
+  min_shot_seconds: 1.2
+  max_shot_seconds: 5.0
+  photo_zoom: 0.05
+  landscape_mode: blur_fill
+  weights: {quality: 0.55, interest: 0.30, motion: 0.15}
+  hook_weights: {quality: 0.50, interest: 0.40, motion: 0.10}
+
+# Shared selection settings.
+selection:
+  # Maximal marginal relevance: score - diversity * max_similarity_to_selected.
+  diversity: 0.6
+  # Penalty for picking another segment from the same source video.
+  same_source_penalty: 0.25
+  # Two photos with pHash Hamming distance <= this are near-duplicates.
+  duplicate_hamming: 10
+  # Small seeded jitter added to scores so Shuffle produces a different reel.
+  shuffle_jitter: 0.08
+  # Max segments one video may contribute, per 5 s of its length.
+  segments_per_5s: 1
+  max_segments_per_video: 4

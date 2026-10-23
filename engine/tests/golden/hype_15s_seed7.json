@@ -1,0 +1,356 @@
+{
+  "version": 2,
+  "algorithm_version": "golden",
+  "preset": "hype",
+  "seed": 7,
+  "output": {
+    "width": 1080,
+    "height": 1920,
+    "fps": 30,
+    "frames": 450,
+    "duration_seconds": 15.0
+  },
+  "music": null,
+  "assets": {
+    "video_010": {
+      "kind": "video",
+      "proxy": "proxy10.mp4",
+      "width": 1080,
+      "height": 1920,
+      "content_hash": "00000000000000000000000000000000000000000000000000000000000001fe",
+      "original_name": "video10.mp4"
+    },
+    "photo_000": {
+      "kind": "photo",
+      "proxy": "proxy0.jpg",
+      "width": 1080,
+      "height": 1440,
+      "content_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+      "original_name": "photo0.jpg"
+    },
+    "photo_001": {
+      "kind": "photo",
+      "proxy": "proxy1.jpg",
+      "width": 1080,
+      "height": 1440,
+      "content_hash": "0000000000000000000000000000000000000000000000000000000000000001",
+      "original_name": "photo1.jpg"
+    },
+    "photo_002": {
+      "kind": "photo",
+      "proxy": "proxy2.jpg",
+      "width": 1080,
+      "height": 1440,
+      "content_hash": "0000000000000000000000000000000000000000000000000000000000000002",
+      "original_name": "photo2.jpg"
+    },
+    "photo_003": {
+      "kind": "photo",
+      "proxy": "proxy3.jpg",
+      "width": 1080,
+      "height": 1440,
+      "content_hash": "0000000000000000000000000000000000000000000000000000000000000003",
+      "original_name": "photo3.jpg"
+    },
+    "video_008": {
+      "kind": "video",
+      "proxy": "proxy8.mp4",
+      "width": 1080,
+      "height": 1920,
+      "content_hash": "00000000000000000000000000000000000000000000000000000000000001fc",
+      "original_name": "video8.mp4"
+    },
+    "video_009": {
+      "kind": "video",
+      "proxy": "proxy9.mp4",
+      "width": 1080,
+      "height": 1920,
+      "content_hash": "00000000000000000000000000000000000000000000000000000000000001fd",
+      "original_name": "video9.mp4"
+    },
+    "photo_004": {
+      "kind": "photo",
+      "proxy": "proxy4.jpg",
+      "width": 1080,
+      "height": 1440,
+      "content_hash": "0000000000000000000000000000000000000000000000000000000000000004",
+      "original_name": "photo4.jpg"
+    },
+    "photo_005": {
+      "kind": "photo",
+      "proxy": "proxy5.jpg",
+      "width": 1080,
+      "height": 1440,
+      "content_hash": "0000000000000000000000000000000000000000000000000000000000000005",
+      "original_name": "photo5.jpg"
+    },
+    "photo_006": {
+      "kind": "photo",
+      "proxy": "proxy6.jpg",
+      "width": 1080,
+      "height": 1440,
+      "content_hash": "0000000000000000000000000000000000000000000000000000000000000006",
+      "original_name": "photo6.jpg"
+    },
+    "photo_007": {
+      "kind": "photo",
+      "proxy": "proxy7.jpg",
+      "width": 1080,
+      "height": 1440,
+      "content_hash": "0000000000000000000000000000000000000000000000000000000000000007",
+      "original_name": "photo7.jpg"
+    }
+  },
+  "clips": [
+    {
+      "asset_id": "video_010",
+      "kind": "video",
+      "timeline_start_frame": 0,
+      "frame_count": 45,
+      "fit": "crop",
+      "crop": null,
+      "source_start_seconds": 0.0,
+      "motion": null,
+      "source_audio_gain": 0.0,
+      "transition_out": {
+        "type": "cut",
+        "frames": 0
+      },
+      "score": 0.6012,
+      "role": "hook",
+      "timeline_start_seconds": 0.0,
+      "duration_seconds": 1.5
+    },
+    {
+      "asset_id": "photo_000",
+      "kind": "photo",
+      "timeline_start_frame": 45,
+      "frame_count": 45,
+      "fit": "crop",
+      "crop": null,
+      "source_start_seconds": null,
+      "motion": {
+        "zoom_from": 1.08,
+        "zoom_to": 1.0,
+        "focus_x": 0.5,
+        "focus_y": 0.45
+      },
+      "source_audio_gain": 0.0,
+      "transition_out": {
+        "type": "cut",
+        "frames": 0
+      },
+      "score": 0.3918,
+      "role": "body",
+      "timeline_start_seconds": 1.5,
+      "duration_seconds": 1.5
+    },
+    {
+      "asset_id": "photo_001",
+      "kind": "photo",
+      "timeline_start_frame": 90,
+      "frame_count": 45,
+      "fit": "crop",
+      "crop": null,
+      "source_start_seconds": null,
+      "motion": {
+        "zoom_from": 1.0,
+        "zoom_to": 1.08,
+        "focus_x": 0.5,
+        "focus_y": 0.45
+      },
+      "source_audio_gain": 0.0,
+      "transition_out": {
+        "type": "cut",
+        "frames": 0
+      },
+      "score": 0.3781,
+      "role": "body",
+      "timeline_start_seconds": 3.0,
+      "duration_seconds": 1.5
+    },
+    {
+      "asset_id": "photo_002",
+      "kind": "photo",
+      "timeline_start_frame": 135,
+      "frame_count": 45,
+      "fit": "crop",
+      "crop": null,
+      "source_start_seconds": null,
+      "motion": {
+        "zoom_from": 1.08,
+        "zoom_to": 1.0,
+        "focus_x": 0.5,
+        "focus_y": 0.45
+      },
+      "source_audio_gain": 0.0,
+      "transition_out": {
+        "type": "cut",
+        "frames": 0
+      },
+      "score": 0.4721,
+      "role": "body",
+      "timeline_start_seconds": 4.5,
+      "duration_seconds": 1.5
+    },
+    {
+      "asset_id": "photo_003",
+      "kind": "photo",
+      "timeline_start_frame": 180,
+      "frame_count": 45,
+      "fit": "crop",
+      "crop": null,
+      "source_start_seconds": null,
+      "motion": {
+        "zoom_from": 1.0,
+        "zoom_to": 1.08,
+        "focus_x": 0.5,
+        "focus_y": 0.45
+      },
+      "source_audio_gain": 0.0,
+      "transition_out": {
+        "type": "cut",
+        "frames": 0
+      },
+      "score": 0.3936,
+      "role": "body",
+      "timeline_start_seconds": 6.0,
+      "duration_seconds": 1.5
+    },
+    {
+      "asset_id": "video_008",
+      "kind": "video",
+      "timeline_start_frame": 225,
+      "frame_count": 45,
+      "fit": "crop",
+      "crop": null,
+      "source_start_seconds": 0.0,
+      "motion": null,
+      "source_audio_gain": 0.0,
+      "transition_out": {
+        "type": "cut",
+        "frames": 0
+      },
+      "score": 0.476,
+      "role": "body",
+      "timeline_start_seconds": 7.5,
+      "duration_seconds": 1.5
+    },
+    {
+      "asset_id": "video_009",
+      "kind": "video",
+      "timeline_start_frame": 270,
+      "frame_count": 45,
+      "fit": "crop",
+      "crop": null,
+      "source_start_seconds": 0.0,
+      "motion": null,
+      "source_audio_gain": 0.0,
+      "transition_out": {
+        "type": "cut",
+        "frames": 0
+      },
+      "score": 0.5994,
+      "role": "body",
+      "timeline_start_seconds": 9.0,
+      "duration_seconds": 1.5
+    },
+    {
+      "asset_id": "photo_004",
+      "kind": "photo",
+      "timeline_start_frame": 315,
+      "frame_count": 45,
+      "fit": "crop",
+      "crop": null,
+      "source_start_seconds": null,
+      "motion": {
+        "zoom_from": 1.08,
+        "zoom_to": 1.0,
+        "focus_x": 0.5,
+        "focus_y": 0.45
+      },
+      "source_audio_gain": 0.0,
+      "transition_out": {
+        "type": "cut",
+        "frames": 0
+      },
+      "score": 0.4817,
+      "role": "body",
+      "timeline_start_seconds": 10.5,
+      "duration_seconds": 1.5
+    },
+    {
+      "asset_id": "photo_005",
+      "kind": "photo",
+      "timeline_start_frame": 360,
+      "frame_count": 30,
+      "fit": "crop",
+      "crop": null,
+      "source_start_seconds": null,
+      "motion": {
+        "zoom_from": 1.0,
+        "zoom_to": 1.08,
+        "focus_x": 0.5,
+        "focus_y": 0.45
+      },
+      "source_audio_gain": 0.0,
+      "transition_out": {
+        "type": "cut",
+        "frames": 0
+      },
+      "score": 0.4685,
+      "role": "body",
+      "timeline_start_seconds": 12.0,
+      "duration_seconds": 1.0
+    },
+    {
+      "asset_id": "photo_006",
+      "kind": "photo",
+      "timeline_start_frame": 390,
+      "frame_count": 30,
+      "fit": "crop",
+      "crop": null,
+      "source_start_seconds": null,
+      "motion": {
+        "zoom_from": 1.08,
+        "zoom_to": 1.0,
+        "focus_x": 0.5,
+        "focus_y": 0.45
+      },
+      "source_audio_gain": 0.0,
+      "transition_out": {
+        "type": "cut",
+        "frames": 0
+      },
+      "score": 0.4333,
+      "role": "body",
+      "timeline_start_seconds": 13.0,
+      "duration_seconds": 1.0
+    },
+    {
+      "asset_id": "photo_007",
+      "kind": "photo",
+      "timeline_start_frame": 420,
+      "frame_count": 30,
+      "fit": "crop",
+      "crop": null,
+      "source_start_seconds": null,
+      "motion": {
+        "zoom_from": 1.0,
+        "zoom_to": 1.08,
+        "focus_x": 0.5,
+        "focus_y": 0.45
+      },
+      "source_audio_gain": 0.0,
+      "transition_out": {
+        "type": "cut",
+        "frames": 0
+      },
+      "score": 0.5192,
+      "role": "ending",
+      "timeline_start_seconds": 14.0,
+      "duration_seconds": 1.0
+    }
+  ],
+  "notes": []
+}

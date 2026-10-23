@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Reel Maker</title>
+<meta name="theme-color" content="#0f0f14">
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main>
+  <header>
+    <div class="logo" aria-hidden="true">▶</div>
+    <div>
+      <h1>Reel Maker</h1>
+      <p>Photos + videos + a song → beat-synced reels</p>
+    </div>
+  </header>
+
+  <section class="card" id="mediaCard">
+    <h2><span class="n">1</span> Photos &amp; videos</h2>
+    <div class="drop" id="drop">
+      <button class="primary" id="pickBtn" type="button">＋ Add photos &amp; videos</button>
+      <p class="muted">or drag them here · JPG, PNG, HEIC, MP4, MOV</p>
+      <input type="file" id="fileInput" multiple accept="image/*,video/*,.heic,.heif,.mov" hidden>
+    </div>
+    <div class="grid" id="grid"></div>
+    <p class="muted hidden" id="orderTip">Drag tiles to reorder. Order is used when photos have no date.</p>
+    <p class="muted" style="margin:10px 0 0">🔒 Your uploads are deleted as soon as your reels are made.</p>
+  </section>
+
+  <section class="card">
+    <h2><span class="n">2</span> Song</h2>
+    <div id="songChosen" class="chosen hidden"></div>
+    <div id="songPicker">
+      <form class="row" id="songForm">
+        <input type="text" id="songQuery" placeholder="Paste a YouTube link or type a song name" autocomplete="off">
+        <button type="submit" id="songSearchBtn">Search</button>
+      </form>
+      <ul class="tracks" id="tracks"></ul>
+      <p class="muted" style="margin:12px 0 0">
+        Or <button type="button" class="chip" id="songUploadBtn">upload an audio file</button>
+        <input type="file" id="songInput" accept="audio/*,.mp3,.m4a,.wav,.aac" hidden>
+      </p>
+      <p class="error hidden" id="songError"></p>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2><span class="n">3</span> Style</h2>
+    <div class="label">Length</div>
+    <div class="chips" id="lengthChips"></div>
+    <div class="label">Styles to make</div>
+    <div class="chips" id="presetChips"></div>
+    <p class="muted" id="lengthWarn"></p>
+  </section>
+
+  <button class="primary wide" id="generateBtn" type="button" disabled>Make my reels</button>
+  <p class="error hidden" id="genError"></p>
+
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const state = {
+    project: null, config: null, files: [], song: null,
+    length: 15, presets: new Set(["hype", "smooth", "cinematic"]),
+    uploads: 0,
+  };
+
+  // ---------- helpers ----------
+  async function api(path, opts = {}) {
+    const res = await fetch(path, opts);
+    if (!res.ok) {
+      let msg = res.statusText;
+      try { msg = (await res.json()).detail || msg; } catch {}
+      throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+    }
+    return res.json();
+  }
+  const json = (body) => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  function el(tag, attrs = {}, ...kids) {
+    const e = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") e.className = v;
+      else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+      else if (v !== null && v !== undefined) e.setAttribute(k, v);
+    }
+    for (const k of kids) e.append(k);
+    return e;
+  }
+  function mmss(sec) {
+    const s = Math.round(sec);
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  }
+  function show(node, on = true) { node.classList.toggle("hidden", !on); }
+  function storeGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
+  function storeSet(k, v) { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} }
+
+  // ---------- project ----------
+  async function ensureProject() {
+    if (state.project) return state.project;
+    const saved = storeGet("reel.project");
+    if (saved) {
+      try {
+        const p = await api(`/api/projects/${saved}`);
+        state.project = p.id;
+        state.files = p.files.map((f) => ({ ...f, status: "done", progress: 1 }));
+        state.song = p.song;
+        return state.project;
+      } catch { storeSet("reel.project", null); }
+    }
+    const p = await api("/api/projects", { method: "POST" });
+    state.project = p.id;
+    storeSet("reel.project", p.id);
+    return p.id;
+  }
+
+  // ---------- media ----------
+  const grid = $("grid");
+  function renderGrid() {
+    grid.replaceChildren(...state.files.map(tileFor));
+    show($("orderTip"), state.files.length > 1);
+    updateGenerate();
+  }
+  function tileFor(f) {
+    const tile = el("div", { class: "tile" + (f.status === "error" ? " err" : ""), draggable: "true", "data-key": f.key || f.id });
+    const isVideo = /\.(mp4|mov|m4v)$/i.test(f.name);
+    const placeholder = () => el("div", { class: "ph" }, (isVideo ? "🎬 " : "🖼️ ") + f.name);
+    // Uploaded files use the server's thumbnail (works for HEIC/HEVC); while uploading,
+    // show the local photo if the browser can decode it.
+    const src = f.id && f.status === "done" ? `/api/projects/${state.project}/files/${f.id}/thumb`
+              : (!isVideo && f.url ? f.url : null);
+    if (src) {
+      const img = el("img", { src, alt: "", loading: "lazy" });
+      img.addEventListener("error", () => img.replaceWith(placeholder()));
+      tile.append(img);
+    } else {
+      tile.append(placeholder());
+    }
+    if (isVideo) tile.append(el("span", { class: "badge" }, "video"));
+    if (f.status === "uploading") tile.append(el("div", { class: "bar", style: `width:${Math.round(f.progress * 100)}%` }));
+    if (f.status === "error") tile.append(el("span", { class: "badge", title: f.error }, "failed"));
+    tile.append(el("button", { class: "x", type: "button", "aria-label": `Remove ${f.name}`, onclick: () => removeFile(f) }, "×"));
+    tile.title = f.error || f.name;
+    // Drag to reorder (desktop).
+    tile.addEventListener("dragstart", (e) => { tile.classList.add("dragging"); e.dataTransfer.setData("text/plain", tile.dataset.key); });
+    tile.addEventListener("dragend", () => tile.classList.remove("dragging"));
+    tile.addEventListener("dragover", (e) => e.preventDefault());
+    tile.addEventListener("drop", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const from = state.files.findIndex((x) => (x.key || x.id) === e.dataTransfer.getData("text/plain"));
+      const to = state.files.findIndex((x) => (x.key || x.id) === tile.dataset.key);
+      if (from < 0 || to < 0 || from === to) return;
+      const [moved] = state.files.splice(from, 1);
+      state.files.splice(to, 0, moved);
+      renderGrid();
+    });
+    return tile;
+  }
+
+  async function addFiles(list) {
+    $("genError").textContent = ""; show($("genError"), false);
+    const pid = await ensureProject();
+    const exts = state.config.media_exts;
+    for (const file of list) {
+      const ext = (file.name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
+      const entry = { key: crypto.randomUUID(), name: file.name, url: URL.createObjectURL(file), status: "uploading", progress: 0 };
+      state.files.push(entry);
+      if (!exts.includes(ext)) { entry.status = "error"; entry.error = "unsupported file type"; continue; }
+      if (file.size > state.config.max_upload_mb * 1048576) { entry.status = "error"; entry.error = "file too large"; continue; }
+      uploadQueue.push(() => upload(pid, file, entry));
+    }
+    renderGrid();
+    pumpUploads();
+  }
+  const uploadQueue = [];
+  function pumpUploads() {
+    while (state.uploads < 3 && uploadQueue.length) {
+      state.uploads++;
+      uploadQueue.shift()().finally(() => { state.uploads--; pumpUploads(); updateGenerate(); });
+    }
+  }
+  function upload(pid, file, entry) {
+    return new Promise((resolve) => {
+      const xhr = new XMLHttpRequest();
+      const form = new FormData();
+      form.append("file", file);
+      xhr.open("POST", `/api/projects/${pid}/files`);
+      let last = 0;
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        entry.progress = e.loaded / e.total;
+        if (Date.now() - last > 150) { last = Date.now(); renderGrid(); }
+      };
+      xhr.onload = () => {
+        if (xhr.status < 300) Object.assign(entry, JSON.parse(xhr.responseText), { status: "done", progress: 1 });
+        else { entry.status = "error"; try { entry.error = JSON.parse(xhr.responseText).detail; } catch { entry.error = "upload failed"; } }
+        renderGrid(); resolve();
+      };
+      xhr.onerror = () => { entry.status = "error"; entry.error = "upload failed"; renderGrid(); resolve(); };
+      xhr.send(form);
+    });
+  }
+  async function removeFile(f) {
+    state.files = state.files.filter((x) => x !== f);
+    renderGrid();
+    if (f.id && state.project) await api(`/api/projects/${state.project}/files/${f.id}`, { method: "DELETE" }).catch(() => {});
+  }
+
+  $("pickBtn").onclick = () => $("fileInput").click();
+  $("fileInput").onchange = (e) => { addFiles([...e.target.files]); e.target.value = ""; };
+  const drop = $("drop");
+  ["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => {
+    if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); drop.classList.add("over"); }
+  }));
+  ["dragleave", "drop"].forEach((t) => drop.addEventListener(t, () => drop.classList.remove("over")));
+  drop.addEventListener("drop", (e) => { e.preventDefault(); if (e.dataTransfer.files.length) addFiles([...e.dataTransfer.files]); });
+
+  // ---------- song ----------
+  let previewAudio = null;
+  function renderSong() {
+    const box = $("songChosen");
+    show(box, !!state.song);
+    show($("songPicker"), !state.song);
+    if (!state.song) return;
+    const s = state.song;
+    box.replaceChildren(
+      s.artwork ? el("img", { src: s.artwork, alt: "" }) : el("div", { class: "logo", "aria-hidden": "true" }, "♪"),
+      el("div", { class: "meta" }, el("b", {}, s.title), el("div", { class: "muted" },
+        s.kind === "preview" ? `${s.artist} · 30 s preview` : "Your audio file")),
+      el("button", { type: "button", onclick: clearSong }, "Change"),
+    );
+    updateGenerate();
+  }
+  async function clearSong() {
+    state.song = null; renderSong();
+    if (state.project) await api(`/api/projects/${state.project}/song`, { method: "DELETE" }).catch(() => {});
+  }
+  function songError(msg) { $("songError").textContent = msg; show($("songError"), !!msg); }
+
+  $("songForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const q = $("songQuery").value.trim();
+    if (!q) return;
+    songError("");
+    const btn = $("songSearchBtn");
+    btn.disabled = true; btn.replaceChildren(el("span", { class: "spinner" }));
+    try {
+      const tracks = await api(`/api/songs?q=${encodeURIComponent(q)}`);
+      const list = $("tracks");
+      list.replaceChildren(...tracks.map(trackRow));
+      if (!tracks.length) songError("No matches. Try “artist - song”.");
+    } catch (err) { songError(err.message); }
+    finally { btn.disabled = false; btn.textContent = "Search"; }
+  };
+  function trackRow(t) {
+    const play = el("button", { type: "button", "aria-label": `Play preview of ${t.title}` }, "▶");
+    play.onclick = () => {
+      if (previewAudio && previewAudio.dataset.url === t.preview_url && !previewAudio.paused) {
+        previewAudio.pause(); play.textContent = "▶"; return;
+      }
+      if (previewAudio) previewAudio.pause();
+      document.querySelectorAll(".track button.playing").forEach((b) => { b.textContent = "▶"; b.classList.remove("playing"); });
+      previewAudio = new Audio(t.preview_url);
+      previewAudio.dataset.url = t.preview_url;
+      previewAudio.play().catch(() => {});
+      previewAudio.onended = () => { play.textContent = "▶"; };
+      play.textContent = "⏸"; play.classList.add("playing");
+    };
+    const use = el("button", { type: "button", class: "primary" }, "Use");
+    use.onclick = async () => {
+      use.disabled = true; use.replaceChildren(el("span", { class: "spinner" }));
+      try {
+        if (previewAudio) previewAudio.pause();
+        const pid = await ensureProject();
+        state.song = await api(`/api/projects/${pid}/song/preview`, json(t));
+        $("tracks").replaceChildren();
+        renderSong();
+      } catch (err) { songError(err.message); use.disabled = false; use.textContent = "Use"; }
+    };
+    return el("li", { class: "track" },
+      el("img", { src: t.artwork_url, alt: "", loading: "lazy" }),
+      el("div", { class: "meta" }, el("b", {}, t.title), el("span", {}, `${t.artist} · ${mmss(t.duration_seconds)}`)),
+      play, use);
+  }
+  $("songUploadBtn").onclick = () => $("songInput").click();
+  $("songInput").onchange = async (e) => {
+    const file = e.target.files[0]; e.target.value = "";
+    if (!file) return;
+    songError("");
+    try {
+      const pid = await ensureProject();
+      const form = new FormData(); form.append("file", file);
+      state.song = await api(`/api/projects/${pid}/song/upload`, { method: "POST", body: form });
+      renderSong();
+    } catch (err) { songError(err.message); }
+  };
+
+  // ---------- settings ----------
+  function chips(container, options, isOn, onToggle) {
+    container.replaceChildren(...options.map(([value, label]) => {
+      const b = el("button", { type: "button", class: "chip", "aria-pressed": String(isOn(value)) }, label);
+      b.onclick = () => { onToggle(value); chips(container, options, isOn, onToggle); updateGenerate(); };
+      return b;
+    }));
+  }
+  function renderSettings() {
+    chips($("lengthChips"), [[7, "7 s"], [15, "15 s"], [30, "30 s"], [60, "60 s"]],
+      (v) => state.length === v, (v) => { state.length = v; storeSet("reel.length", v); });
+    chips($("presetChips"), state.config.presets.map((p) => [p, p[0].toUpperCase() + p.slice(1)]),
+      (v) => state.presets.has(v),
+      (v) => { state.presets.has(v) ? state.presets.delete(v) : state.presets.add(v); storeSet("reel.presets", [...state.presets].join(",")); });
+  }
+  function updateGenerate() {
+    const done = state.files.filter((f) => f.status === "done").length;
+    const busy = state.files.some((f) => f.status === "uploading");
+    const btn = $("generateBtn");
+    btn.disabled = !done || busy || !state.presets.size;
+    btn.textContent = busy ? "Uploading…" : done ? `Make my reels (${done} file${done > 1 ? "s" : ""})` : "Add photos or videos to start";
+    const warn = state.song && state.song.kind === "preview" && state.length > 30
+      ? "Song previews are 30 s, so 60 s reels need an uploaded audio file." : "";
+    $("lengthWarn").textContent = warn;
+  }
+
+  // ---------- generate ----------
+  async function generate() {
+    show($("genError"), false);
+    const btn = $("generateBtn");
+    btn.disabled = true;
+    btn.replaceChildren(el("span", { class: "spinner" }), " Starting…");
+    try {
+      const pid = await ensureProject();
+      const order = state.files.filter((f) => f.status === "done").map((f) => f.id);
+      const { job_id } = await api(`/api/projects/${pid}/render`,
+        json({ length: state.length, presets: [...state.presets], seed: 0, order }));
+      // The uploads are deleted once the reels are made; remember the project only
+      // until then, so the result page can send the user back if rendering fails.
+      storeSet("reel.project", null);
+      storeSet("reel.lastProject", pid);
+      location.href = `/r/${job_id}`;
+    } catch (err) {
+      $("genError").textContent = err.message; show($("genError"), true);
+      updateGenerate();
+    }
+  }
+  $("generateBtn").onclick = generate;
+
+  // ---------- start ----------
+  (async () => {
+    state.config = await api("/api/config");
+    const len = Number(storeGet("reel.length")); if ([7, 15, 30, 60].includes(len)) state.length = len;
+    const pr = storeGet("reel.presets");
+    if (pr) state.presets = new Set(pr.split(",").filter((p) => state.config.presets.includes(p)));
+    if (!state.presets.size) state.presets = new Set(state.config.presets);
+    renderSettings();
+    const retry = new URLSearchParams(location.search).get("retry");
+    if (retry && /^[0-9a-f]{32}$/.test(retry)) {
+      storeSet("reel.project", retry);
+      history.replaceState(null, "", "/");
+    }
+    if (storeGet("reel.project")) await ensureProject().catch(() => {});
+    renderGrid(); renderSong();
+  })();
+})();
+</script>
+</body>
+</html>
