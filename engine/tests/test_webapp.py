@@ -196,3 +196,31 @@ def test_reel_length_depends_on_song_source(client, kind, asked, expected):
     store.save_manifest(pid, m)
     jid = client.post(f"/api/projects/{pid}/render", json={"length": asked}).json()["job_id"]
     assert client.get(f"/api/jobs/{jid}").json()["length"] == expected
+
+
+def test_cancelled_upload_does_not_block_rendering(client):
+    pid = client.post("/api/projects").json()["id"]
+    client.post(f"/api/projects/{pid}/files", files={"file": ("a.jpg", b"\xff\xd8 junk", "image/jpeg")})
+    init = client.post(f"/api/projects/{pid}/uploads", json={"name": "big.mov", "size": 20}).json()
+    url = f"/api/projects/{pid}/uploads/{init['upload_id']}"
+    client.put(f"{url}/0", content=b"x" * 20)
+    assert client.post(f"/api/projects/{pid}/render", json={"length": 7}).status_code == 409
+
+    # The user removes the tile: the page cancels the upload.
+    assert client.delete(url).status_code == 200
+    media = client.app.state.store.project_dir(pid) / "media"
+    assert not list(media.glob("*.part"))
+    assert client.put(f"{url}/0", content=b"x" * 20).status_code == 404  # late piece
+    assert client.post(f"{url}/complete").status_code == 404              # never added
+    assert client.post(f"/api/projects/{pid}/render", json={"length": 7}).status_code == 200
+    assert [f["name"] for f in client.get(f"/api/projects/{pid}").json()["files"]] == ["a.jpg"]
+
+
+def test_abandoned_upload_stops_blocking_after_idle_time(client):
+    pid = client.post("/api/projects").json()["id"]
+    client.post(f"/api/projects/{pid}/files", files={"file": ("a.jpg", b"\xff\xd8 junk", "image/jpeg")})
+    init = client.post(f"/api/projects/{pid}/uploads", json={"name": "big.mov", "size": 20}).json()
+    store = client.app.state.store
+    store.uploads[init["upload_id"]]["active"] -= 11 * 60  # tab closed 11 minutes ago
+    assert client.post(f"/api/projects/{pid}/render", json={"length": 7}).status_code == 200
+    assert init["upload_id"] not in store.uploads

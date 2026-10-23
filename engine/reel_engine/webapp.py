@@ -56,6 +56,9 @@ MIN_FREE_DISK_BYTES = 3 * 1024 ** 3
 # this PC. A visitor is the client IP the Cloudflare Worker reports (see client_id).
 LIMITS = {"render": (6, 3600), "project": (30, 3600), "upload": (400, 3600)}
 MAX_QUEUED_JOBS = 8
+# A pending upload with no new piece for this long was abandoned (tab closed, network
+# gone). It no longer blocks rendering and is discarded when a render starts.
+UPLOAD_IDLE_SECONDS = 10 * 60
 PROXY_SECRET_ENV = "REEL_PROXY_SECRET"
 MEDIA_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".mp4", ".mov", ".m4v"}
 AUDIO_EXTS = {".mp3", ".m4a", ".aac", ".wav"}
@@ -298,7 +301,7 @@ def create_app(data: Path, result_ttl_hours: float = RESULT_TTL_HOURS) -> FastAP
             chunks = -(-body.size // UPLOAD_CHUNK_BYTES)
             store.uploads[uid] = {"pid": pid, "name": _display_name(body.name), "ext": ext,
                                   "size": body.size, "chunks": chunks, "received": set(),
-                                  "started": time.time()}
+                                  "started": time.time(), "active": time.time()}
             # Pre-size the file so chunks can land in any order.
             with (store.project_dir(pid) / "media" / f"{uid}.part").open("wb") as f:
                 f.truncate(body.size)
@@ -319,11 +322,24 @@ def create_app(data: Path, result_ttl_hours: float = RESULT_TTL_HOURS) -> FastAP
         if len(data) != expected:
             raise HTTPException(400, f"chunk {index} is {len(data)} bytes, expected {expected}")
         part = store.project_dir(pid) / "media" / f"{uid}.part"
-        with part.open("r+b") as f:  # retries just overwrite the same bytes
-            f.seek(offset)
-            f.write(data)
+        if uid not in store.uploads:
+            raise HTTPException(404, "upload was cancelled")
+        try:
+            with part.open("r+b") as f:  # retries just overwrite the same bytes
+                f.seek(offset)
+                f.write(data)
+        except FileNotFoundError as e:
+            raise HTTPException(404, "upload was cancelled") from e
         up["received"].add(index)
+        up["active"] = time.time()
         return {"received": len(up["received"]), "chunks": up["chunks"]}
+
+    @app.delete("/api/projects/{pid}/uploads/{uid}")
+    def cancel_upload(pid: str, uid: str) -> dict:
+        """The user removed a file that was still uploading: forget it and its bytes."""
+        store.project_dir(pid)
+        _discard_upload(store, uid, pid)
+        return {"ok": True}
 
     @app.post("/api/projects/{pid}/uploads/{uid}/complete")
     def complete_upload(pid: str, uid: str) -> dict:
@@ -439,8 +455,13 @@ def create_app(data: Path, result_ttl_hours: float = RESULT_TTL_HOURS) -> FastAP
     @app.post("/api/projects/{pid}/render")
     def start_render(pid: str, body: RenderIn, request: Request) -> dict:
         store.project_dir(pid)
-        if any(u["pid"] == pid for u in store.uploads.values()):
-            raise HTTPException(409, "some files are still uploading")
+        now = time.time()
+        for uid, up in list(store.uploads.items()):
+            if up["pid"] != pid:
+                continue
+            if now - up["active"] < UPLOAD_IDLE_SECONDS:
+                raise HTTPException(409, "some files are still uploading")
+            _discard_upload(store, uid, pid)  # abandoned; it would never finish
         with store.lock:
             queued = sum(1 for j in store.jobs.values() if j.status == "queued")
         if queued >= MAX_QUEUED_JOBS:
@@ -573,6 +594,16 @@ def client_id(request: Request) -> str:
         if ip:
             return ip[:64]
     return request.client.host if request.client else "unknown"
+
+
+def _discard_upload(store: "Store", uid: str, pid: str) -> None:
+    up = store.uploads.get(uid) if ID_RE.match(uid) else None
+    if up and up["pid"] == pid:
+        store.uploads.pop(uid, None)
+        try:
+            (store.projects / pid / "media" / f"{uid}.part").unlink(missing_ok=True)
+        except OSError:
+            pass  # a piece is still being written (Windows); the project cleanup removes it
 
 
 def _pending_upload(store: "Store", pid: str, uid: str) -> dict:

@@ -189,37 +189,59 @@
   }
   // Upload in pieces (each well under Cloudflare's 100 MB request limit), retrying
   // a failed piece a few times so a flaky phone connection doesn't lose the file.
+  // Upload in pieces (each well under Cloudflare's 100 MB request limit), retrying
+  // a failed piece a few times so a flaky phone connection doesn't lose the file.
+  // Removing the tile sets entry.cancelled: the loop stops, the request in flight is
+  // aborted, and the server is told to discard the partial file.
   async function upload(pid, file, entry) {
     const fail = (msg) => { entry.status = "error"; entry.error = msg; renderGrid(); };
+    if (entry.cancelled) return;
     let init;
     try {
       init = await api(`/api/projects/${pid}/uploads`, json({ name: file.name, size: file.size }));
     } catch (err) { return fail(err.message); }
+    entry.uploadId = init.upload_id;
+    if (entry.cancelled) return discardUpload(pid, entry);
     let last = 0;
     for (let i = 0; i < init.chunks; i++) {
       const piece = file.slice(i * init.chunk_size, Math.min(file.size, (i + 1) * init.chunk_size));
       let ok = false, lastErr = "upload failed";
       for (let attempt = 0; attempt < 4 && !ok; attempt++) {
         if (attempt) await new Promise((r) => setTimeout(r, 1000 * 2 ** attempt));
-        ok = await putChunk(`/api/projects/${pid}/uploads/${init.upload_id}/${i}`, piece, (sent) => {
+        if (entry.cancelled) return discardUpload(pid, entry);
+        ok = await putChunk(`/api/projects/${pid}/uploads/${init.upload_id}/${i}`, piece, entry, (sent) => {
           entry.progress = (i * init.chunk_size + sent) / file.size;
           if (Date.now() - last > 150) { last = Date.now(); renderGrid(); }
         }).catch((e) => { lastErr = e.message; return false; });
       }
-      if (!ok) return fail(lastErr);
+      if (entry.cancelled) return discardUpload(pid, entry);
+      if (!ok) { discardUpload(pid, entry); return fail(lastErr); }
     }
     try {
-      Object.assign(entry, await api(`/api/projects/${pid}/uploads/${init.upload_id}/complete`, { method: "POST" }),
-        { status: "done", progress: 1 });
+      const done = await api(`/api/projects/${pid}/uploads/${init.upload_id}/complete`, { method: "POST" });
+      if (entry.cancelled) {
+        // Removed while finishing: the file was already added, so delete it again.
+        await api(`/api/projects/${pid}/files/${done.id}`, { method: "DELETE" }).catch(() => {});
+        return;
+      }
+      Object.assign(entry, done, { status: "done", progress: 1 });
     } catch (err) { return fail(err.message); }
     renderGrid();
   }
-  function putChunk(url, blob, onProgress) {
+  function discardUpload(pid, entry) {
+    if (!entry.uploadId) return;
+    const id = entry.uploadId;
+    entry.uploadId = null;
+    return api(`/api/projects/${pid}/uploads/${id}`, { method: "DELETE" }).catch(() => {});
+  }
+  function putChunk(url, blob, entry, onProgress) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
+      entry.xhr = xhr;
       xhr.open("PUT", url);
       xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded);
       xhr.onload = () => {
+        entry.xhr = null;
         if (xhr.status < 300) return resolve(true);
         let msg = "upload failed";
         try { msg = JSON.parse(xhr.responseText).detail || msg; } catch {}
@@ -227,13 +249,19 @@
         if (xhr.status >= 400 && xhr.status < 500 && ![408, 429].includes(xhr.status)) reject(new Error(msg));
         else resolve(false);
       };
-      xhr.onerror = () => resolve(false);
+      xhr.onerror = () => { entry.xhr = null; resolve(false); };
+      xhr.onabort = () => { entry.xhr = null; resolve(false); };
       xhr.send(blob);
     });
   }
   async function removeFile(f) {
     state.files = state.files.filter((x) => x !== f);
     renderGrid();
+    if (f.status === "uploading") {
+      f.cancelled = true;
+      if (f.xhr) f.xhr.abort();  // the upload loop then discards the partial file
+      return;
+    }
     if (f.id && state.project) await api(`/api/projects/${state.project}/files/${f.id}`, { method: "DELETE" }).catch(() => {});
   }
 
