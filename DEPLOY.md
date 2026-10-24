@@ -28,10 +28,12 @@ Phone ──https──► makemyreel.in ──► Worker ──► one containe
     are refused right away), and the page checks size and video length before uploading.
 - Uploads are deleted after rendering (unrendered drafts after 2 hours), reels after 20 minutes.
 - **Deploys switch over safely.** Cloudflare doesn't restart a running container on
-  deploy, so after each deploy the workflow pings the Worker, which restarts the
-  container onto the new image as soon as nothing would be lost: no render or upload
-  running, no unexpired reels, and no draft edited in the last 30 minutes. It checks
-  every minute until then. A sleeping container just starts on the new image.
+  deploy, and the Durable Object that controls it can keep its old code too. So the
+  Worker tells the object its version on every request, and the workflow pings it
+  after each deploy. As soon as nothing would be lost (no render or upload running, no
+  unexpired reels, no draft edited in the last 30 minutes), the object stops the
+  container and resets itself, so the next request gets the new code and image. It
+  checks every minute until then. A sleeping container just starts on the new version.
 - **One container holds everything** (uploads, the queue, reels). It sleeps after
   30 minutes with no visitors, and **sleeping wipes its disk**, so a reel can't
   outlive that. The first visit after a sleep shows "Reel Maker is starting" for

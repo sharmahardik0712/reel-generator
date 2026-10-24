@@ -14,6 +14,8 @@
 		{ "pattern": "www.makemyreel.in", "custom_domain": true }
 	],
 	"observability": { "enabled": true },
+	// The Worker's own version, used to tell the Durable Object a newer deploy exists.
+	"version_metadata": { "binding": "CF_VERSION_METADATA" },
 	"containers": [
 		{
 			"class_name": "ReelContainer",

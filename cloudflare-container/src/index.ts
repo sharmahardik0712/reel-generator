@@ -9,10 +9,15 @@
  * and sleeping wipes its disk, so that is set longer than the app's 20 minute reel TTL.
  *
  * Deploys: Cloudflare doesn't replace a running Durable Object container when a new
- * image is deployed. So the object remembers which image it started the container
- * with; when that differs from the current image, an alarm asks the app every minute
- * whether anything is in use (a render, an upload, unexpired reels, an active draft)
- * and restarts onto the new image as soon as nothing would be lost.
+ * image is deployed, and while its container runs the object itself may keep running
+ * the code (and image reference) it started with. So an upgrade is due when either
+ *   - the Worker (always the newest code) reports a newer version than the object's
+ *     own, sent with every request as X-Reel-Version-Time; or
+ *   - the object's current image differs from the one it started the container with.
+ * Then an alarm asks the app every minute whether anything is in use (a render, an
+ * upload, unexpired reels, an active draft). As soon as nothing would be lost, it stops
+ * the container and either resets itself (ctx.abort, so the next request gets fresh
+ * code and the new image) or, if only the image changed, starts the new image.
  */
 import { DurableObject } from "cloudflare:workers";
 
@@ -25,10 +30,13 @@ const INSTANCE = "standard-4";
 const DEPLOY_CHECK_PATH = "/__reel/deploy-check";
 const UPGRADE_CHECK_EVERY_MS = 60 * 1000;
 const STARTED_IMAGE_KEY = "startedImage";
+const NEWEST_VERSION_KEY = "newestWorkerVersionTime";
+const RESET_FOR_KEY = "resetForVersionTime";
 
 interface Env {
 	REEL: DurableObjectNamespace<ReelContainer>;
 	REEL_PROXY_SECRET: string; // `wrangler secret put REEL_PROXY_SECRET`
+	CF_VERSION_METADATA: WorkerVersionMetadata;
 }
 
 export class ReelContainer extends DurableObject<Env> {
@@ -49,6 +57,7 @@ export class ReelContainer extends DurableObject<Env> {
 
 	async fetch(request: Request): Promise<Response> {
 		const url = new URL(request.url);
+		await this.noteWorkerVersion(request.headers.get("X-Reel-Version-Time"));
 		if (url.pathname === DEPLOY_CHECK_PATH) {
 			// Never wakes a sleeping container: its next start uses the new image anyway.
 			const scheduled = await this.scheduleUpgradeCheck(0);
@@ -103,29 +112,45 @@ export class ReelContainer extends DurableObject<Env> {
 		throw new Error(`Reel Maker did not start listening on port ${PORT}`);
 	}
 
-	/** Runs on the alarm: restart onto the new image once nothing would be lost. */
+	/** Runs on the alarm: move onto the new version once nothing would be lost. */
 	async alarm(): Promise<void> {
-		if (!(await this.isOutdated())) return;
-		let busy: string[] = ["unknown"];
-		try {
-			const res = await this.ctx.container!.getTcpPort(PORT).fetch("http://container/api/internal/status", {
-				headers: { "X-Reel-Proxy-Secret": this.env.REEL_PROXY_SECRET ?? "" },
-				signal: AbortSignal.timeout(5000),
-			});
-			if (res.status === 404) {
-				// An app from before this endpoint existed: we can't tell whether it's in
-				// use, so don't restart it. Stop checking too, because the checks would
-				// keep it awake; once it sleeps, its next start uses the new image.
-				console.log("upgrade: running app predates the status check; letting it sleep");
+		const why = await this.upgradeReason();
+		if (!why) return;
+		const container = this.ctx.container!;
+		if (container.running) {
+			let busy: string[] = ["unknown"];
+			try {
+				const res = await container.getTcpPort(PORT).fetch("http://container/api/internal/status", {
+					headers: { "X-Reel-Proxy-Secret": this.env.REEL_PROXY_SECRET ?? "" },
+					signal: AbortSignal.timeout(5000),
+				});
+				if (res.status === 404) {
+					// An app from before this endpoint existed: we can't tell whether it's in
+					// use, so don't restart it. Stop checking too, because the checks would
+					// keep it awake; once it sleeps, its next start uses the new version.
+					console.log("upgrade: running app predates the status check; letting it sleep");
+					return;
+				}
+				if (res.ok) busy = ((await res.json()) as { busy: string[] }).busy;
+			} catch (err) {
+				console.warn("upgrade check: status unavailable", err);
+			}
+			if (busy.length) {
+				console.log(`upgrade (${why}) waiting; in use: ${busy.join(", ")}`);
+				await this.ctx.storage.setAlarm(Date.now() + UPGRADE_CHECK_EVERY_MS);
 				return;
 			}
-			if (res.ok) busy = ((await res.json()) as { busy: string[] }).busy;
-		} catch (err) {
-			console.warn("upgrade check: status unavailable", err);
 		}
-		if (busy.length) {
-			console.log(`upgrade waiting; in use: ${busy.join(", ")}`);
-			await this.ctx.storage.setAlarm(Date.now() + UPGRADE_CHECK_EVERY_MS);
+		if (why === "code") {
+			console.log("upgrade: stopping the container and resetting onto the new code");
+			const newest = (await this.ctx.storage.get<number>(NEWEST_VERSION_KEY)) ?? 0;
+			await this.ctx.storage.put(RESET_FOR_KEY, newest);
+			if (container.running) {
+				await container.destroy();
+				await this.monitoring?.catch(() => {});
+			}
+			// The next request creates a fresh object (new code) that starts the new image.
+			this.ctx.abort("upgrading to a newer deploy");
 			return;
 		}
 		console.log("upgrade: restarting the container onto the new image");
@@ -143,18 +168,39 @@ export class ReelContainer extends DurableObject<Env> {
 		await this.startAndWaitForPort();
 	}
 
-	/** True when a container is running an image other than the current deploy's. */
-	private async isOutdated(): Promise<boolean> {
+	/** Remembers the newest Worker version seen, if it's newer than this object's code. */
+	private async noteWorkerVersion(header: string | null): Promise<void> {
+		const seen = Date.parse(header ?? "");
+		const own = Date.parse(this.env.CF_VERSION_METADATA?.timestamp ?? "");
+		if (!Number.isFinite(seen) || !Number.isFinite(own) || seen <= own) return;
+		const known = (await this.ctx.storage.get<number>(NEWEST_VERSION_KEY)) ?? 0;
+		if (seen > known) await this.ctx.storage.put(NEWEST_VERSION_KEY, seen);
+	}
+
+	/**
+	 * Why an upgrade is due, or null: "code" when a newer deploy exists than this
+	 * object's code; "image" when the container runs an older image than this code's.
+	 */
+	private async upgradeReason(): Promise<"code" | "image" | null> {
+		const newest = (await this.ctx.storage.get<number>(NEWEST_VERSION_KEY)) ?? 0;
+		const own = Date.parse(this.env.CF_VERSION_METADATA?.timestamp ?? "") || 0;
+		// Storage survives a reset, so compare with this object's own code every time.
+		if (newest > own) {
+			// Reset once per version; if that didn't bring new code, wait for a natural
+			// sleep rather than resetting (and cold-starting) over and over.
+			const resetFor = await this.ctx.storage.get<number>(RESET_FOR_KEY);
+			return resetFor === newest ? null : "code";
+		}
 		const container = this.ctx.container;
-		if (!container?.running) return false;
+		if (!container?.running) return null;
 		// No record means it was started before this tracking existed: treat as old.
 		const started = await this.ctx.storage.get<string>(STARTED_IMAGE_KEY);
-		return started !== container.images.base;
+		return started !== container.images.base ? "image" : null;
 	}
 
 	/** Schedules the upgrade check if one is due; returns whether it did. */
 	private async scheduleUpgradeCheck(delayMs: number): Promise<boolean> {
-		if (!(await this.isOutdated())) return false;
+		if (!(await this.upgradeReason())) return false;
 		if ((await this.ctx.storage.getAlarm()) === null) {
 			await this.ctx.storage.setAlarm(Date.now() + delayMs);
 		}
@@ -193,6 +239,8 @@ export default {
 		// The app's per-visitor limits key on this; the secret proves it came from here.
 		headers.set("X-Reel-Client-IP", request.headers.get("CF-Connecting-IP") ?? "unknown");
 		headers.set("X-Reel-Proxy-Secret", env.REEL_PROXY_SECRET ?? "");
+		// Lets the Durable Object notice that it's running older code than this Worker.
+		headers.set("X-Reel-Version-Time", env.CF_VERSION_METADATA?.timestamp ?? "");
 
 		const hasBody = request.method !== "GET" && request.method !== "HEAD";
 		const forwarded = new Request(request.url, {
