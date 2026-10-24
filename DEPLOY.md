@@ -34,6 +34,10 @@ Phone ──https──► makemyreel.in ──► Worker ──► one containe
   unexpired reels, no draft edited in the last 30 minutes), the object stops the
   container and resets itself, so the next request gets the new code and image. It
   checks every minute until then. A sleeping container just starts on the new version.
+- **Need it live right now?** Run `powershell -ExecutionPolicy Bypass -File
+  scripts\restart-site.ps1`. It stops the container immediately (anything in
+  progress on it is lost), and the next visit starts the newest version. It uses the
+  secret in `.reel-secret`, and the restart address answers no one else.
 - **One container holds everything** (uploads, the queue, reels). It sleeps after
   30 minutes with no visitors, and **sleeping wipes its disk**, so a reel can't
   outlive that. The first visit after a sleep shows "Reel Maker is starting" for

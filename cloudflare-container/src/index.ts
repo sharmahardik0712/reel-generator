@@ -207,6 +207,26 @@ export class ReelContainer extends DurableObject<Env> {
 		return true;
 	}
 
+	/**
+	 * Owner-only manual restart (POST /__reel/restart with the proxy secret): stops the
+	 * container now, whatever it's doing, and resets this object so the next request
+	 * gets the newest code and image. Use when an update must go live immediately.
+	 */
+	async forceRestart(): Promise<string> {
+		const container = this.ctx.container;
+		const wasRunning = !!container?.running;
+		if (wasRunning) {
+			await container!.destroy();
+			await this.monitoring?.catch(() => {});
+		}
+		await this.ctx.storage.deleteAll();
+		console.log(`manual restart (container was ${wasRunning ? "running" : "asleep"})`);
+		// Reset after replying, so the caller gets an answer.
+		setTimeout(() => this.ctx.abort("manual restart"), 0);
+		return wasRunning ? "stopped the container; the next visit starts the newest version\n"
+			: "container was already asleep; the next visit starts the newest version\n";
+	}
+
 	private observeExit(): void {
 		if (this.monitoring) return;
 		this.monitoring = this.ctx
@@ -222,6 +242,18 @@ export class ReelContainer extends DurableObject<Env> {
 
 // The one canonical address; www.makemyreel.in redirects here.
 const CANONICAL_HOST = "makemyreel.in";
+// Owner-only: `scripts/restart-site.ps1` posts here with the proxy secret.
+const RESTART_PATH = "/__reel/restart";
+
+async function manualRestart(request: Request, env: Env): Promise<Response> {
+	const sent = request.headers.get("Authorization") ?? "";
+	const expected = `Bearer ${env.REEL_PROXY_SECRET ?? ""}`;
+	const enc = new TextEncoder();
+	const ok = request.method === "POST" && !!env.REEL_PROXY_SECRET && sent.length === expected.length &&
+		crypto.subtle.timingSafeEqual(enc.encode(sent), enc.encode(expected));
+	if (!ok) return new Response("Not found\n", { status: 404 });
+	return new Response(await env.REEL.getByName("main").forceRestart());
+}
 
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {
@@ -230,6 +262,7 @@ export default {
 			url.hostname = CANONICAL_HOST;
 			return Response.redirect(url.toString(), 301);
 		}
+		if (url.pathname === RESTART_PATH) return manualRestart(request, env);
 
 		const headers = new Headers(request.headers);
 		// Never let visitors supply these themselves.
