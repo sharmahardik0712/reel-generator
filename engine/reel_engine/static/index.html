@@ -16,6 +16,9 @@
       <p>Photos + videos + a song → beat-synced reels</p>
     </div>
   </header>
+  <p class="pitch">Drop in whole videos, no trimming needed. Reel Maker finds the best moments,
+    cuts them to the beat of your song and hands you a reel ready to post.
+    <a href="#how">How it works</a></p>
 
   <section class="card" id="mediaCard">
     <h2><span class="n">1</span> Photos &amp; videos</h2>
@@ -59,6 +62,34 @@
 
   <button class="primary wide" id="generateBtn" type="button" disabled>Make my reels</button>
   <p class="error hidden" id="genError"></p>
+
+  <section class="card about" id="how">
+    <h2>How it works</h2>
+    <ol class="steps">
+      <li><b>Add your photos and videos</b><span>Straight from your phone's gallery: long clips,
+        iPhone HEIC photos and HDR video all work.</span></li>
+      <li><b>Pick a song</b><span>Paste a YouTube link or type the song's name.</span></li>
+      <li><b>It picks the best moments</b><span>Every video is scanned for the sharp, well-lit,
+        moving parts. Blurry or shaky bits and near-duplicate photos are left out.</span></li>
+      <li><b>It cuts to the beat</b><span>The song starts at its liveliest part, your strongest
+        shot opens the reel, and every cut lands on a beat. Ready in about a minute.</span></li>
+    </ol>
+    <div class="compare">
+      <div><b>Other apps</b><span>You trim every clip by hand, then line the cuts up with the
+        music yourself.</span></div>
+      <div class="ours"><b>Reel Maker</b><span>You drop in whole clips. It chooses the moments and
+        syncs them to the music for you.</span></div>
+    </div>
+    <p class="muted">🔒 Your uploads are deleted as soon as your reel is made, and finished
+      reels after 20 minutes.</p>
+  </section>
+
+  <section class="card contact">
+    <h2>Have a suggestion?</h2>
+    <p class="muted">Ideas, bugs, a song that didn't work: I'd love to hear it.</p>
+    <a class="btn" id="contactLink" href="#">✉️ Email me</a>
+    <span class="muted" id="contactAddr"></span>
+  </section>
 
 </main>
 
@@ -458,6 +489,15 @@
     }
   }
   $("generateBtn").onclick = generate;
+
+  // ---------- contact ----------
+  // Assembled here rather than written in the HTML, so address-harvesting bots that
+  // scan page source don't pick it up.
+  (() => {
+    const addr = ["sharmahardik0712", "gmail.com"].join("@");
+    $("contactLink").href = `mailto:${addr}?subject=${encodeURIComponent("Reel Maker suggestion")}`;
+    $("contactAddr").textContent = addr;
+  })();
 
   // ---------- start ----------
   (async () => {

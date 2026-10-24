@@ -87,3 +87,24 @@ input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: 1px; 
   border-radius: 50%; animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Intro, "How it works" and contact */
+.pitch { margin: -8px 0 18px; color: var(--muted); font-size: 15px; }
+.pitch a, .site-footer a { color: var(--accent); }
+.about { margin-top: 24px; }
+.steps { list-style: none; counter-reset: step; margin: 0 0 16px; padding: 0; display: grid; gap: 12px; }
+.steps li { counter-increment: step; display: grid; grid-template-columns: 28px 1fr; column-gap: 12px; }
+.steps li::before { content: counter(step); grid-row: span 2; width: 28px; height: 28px; border-radius: 50%;
+  display: grid; place-items: center; font-size: 13px; font-weight: 600; color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
+.steps b { font-size: 15px; }
+.steps span { color: var(--muted); font-size: 14px; }
+.compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.compare div { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; display: grid; gap: 4px; }
+.compare span { color: var(--muted); font-size: 14px; }
+.compare .ours { border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.contact { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+.contact h2, .contact p { flex-basis: 100%; margin-bottom: 0; }
+.contact h2 { margin-bottom: -4px; }
+.site-footer { text-align: center; color: var(--muted); font-size: 13px; margin-top: 24px; }

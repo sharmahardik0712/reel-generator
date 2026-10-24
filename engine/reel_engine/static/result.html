@@ -58,6 +58,8 @@
       <button type="button" class="danger" id="deleteBtn">Delete these reels now</button>
     </div>
   </section>
+
+  <p class="site-footer">Have a suggestion? <a id="contactLink" href="#">Email me</a></p>
 </main>
 
 <script>
@@ -163,6 +165,11 @@
     const res = await fetch(base, { method: "DELETE" });
     if (res.ok) gone("Reels deleted", "Nothing from this reel is left on the server.");
   };
+
+  // Assembled here so address-harvesting bots don't find it in the page source.
+  const addr = ["sharmahardik0712", "gmail.com"].join("@");
+  $("contactLink").href = `mailto:${addr}?subject=${encodeURIComponent("Reel Maker suggestion")}`;
+  $("contactLink").title = addr;
 
   poll();
 })();
