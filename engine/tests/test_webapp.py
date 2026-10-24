@@ -302,3 +302,39 @@ def test_long_videos_are_refused_on_arrival(client, media_dir, monkeypatch):
     over_total = send("08_rotated.mp4")  # +4 s = 9 s > 8 s
     assert over_total.status_code == 413 and "in this reel" in over_total.json()["detail"]
     assert [f["name"] for f in client.get(f"/api/projects/{pid}").json()["files"]] == ["07_zoom.mov"]
+
+
+def test_internal_status_reports_what_a_restart_would_lose(client, monkeypatch):
+    import os
+    from reel_engine import webapp
+    from reel_engine.webapp import Job
+    store = client.app.state.store
+    assert client.get("/api/internal/status").json() == {"idle": True, "busy": []}
+
+    # An active draft (files uploaded recently) blocks; an old one doesn't.
+    pid = client.post("/api/projects").json()["id"]
+    add_photo(client, pid)
+    assert client.get("/api/internal/status").json()["busy"] == ["draft"]
+    old = time.time() - webapp.DRAFT_ACTIVE_SECONDS - 60
+    os.utime(store.project_dir(pid) / "project.json", (old, old))
+    assert client.get("/api/internal/status").json()["idle"] is True
+
+    # An upload in progress, a running render, unexpired reels.
+    init = client.post(f"/api/projects/{pid}/uploads", json={"name": "b.jpg", "size": 10}).json()
+    assert "upload" in client.get("/api/internal/status").json()["busy"]
+    client.delete(f"/api/projects/{pid}/uploads/{init['upload_id']}")
+    job = Job("a" * 32, pid, 7, ["hype"], 0, status="rendering")
+    store.jobs[job.id] = job
+    assert "render" in client.get("/api/internal/status").json()["busy"]
+    job.status, job.expires_at = "done", time.time() + 600
+    store.save_job(job)
+    assert client.get("/api/internal/status").json()["busy"] == ["reels"]
+    job.expires_at = time.time() - 1
+    store.save_job(job)
+    assert client.get("/api/internal/status").json()["idle"] is True
+
+    # Behind the Worker it only answers requests carrying the secret.
+    monkeypatch.setenv("REEL_PROXY_SECRET", "s3cret")
+    assert client.get("/api/internal/status").status_code == 404
+    ok = client.get("/api/internal/status", headers={"x-reel-proxy-secret": "s3cret"})
+    assert ok.status_code == 200

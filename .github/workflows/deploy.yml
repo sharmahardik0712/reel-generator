@@ -84,3 +84,15 @@ jobs:
         run: |
           npm ci
           npx wrangler deploy
+
+      - name: Start the switch-over to the new image
+        # A running container keeps its old image until restarted. This asks the Worker
+        # to restart it as soon as nothing is in use (a no-op if it's asleep or current).
+        run: |
+          sleep 15
+          for i in 1 2 3 4 5; do
+            if curl -fsS -X POST -A "Mozilla/5.0 (reel-ci)" \
+                 https://makemyreel.in/__reel/deploy-check; then exit 0; fi
+            sleep 15
+          done
+          echo "::warning::deploy-check ping failed; the next visitor will trigger the switch-over"

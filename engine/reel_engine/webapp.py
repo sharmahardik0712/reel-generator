@@ -46,6 +46,9 @@ log = logging.getLogger(__name__)
 MB = 1024 * 1024
 GB = 1024 * MB
 PROJECT_TTL_HOURS = 2  # unrendered drafts
+# A draft edited this recently is someone mid-way through making a reel: don't
+# restart under them. Older drafts would have been lost to a container sleep anyway.
+DRAFT_ACTIVE_SECONDS = 30 * 60
 RESULT_TTL_MINUTES = 20
 WORK_TTL_HOURS = 6  # orphaned work dirs (e.g. after a crash)
 CLEANUP_EVERY_SECONDS = 2 * 60  # expired reels already answer 410; this frees disk
@@ -178,6 +181,34 @@ class Store:
                     raise HTTPException(429, msg)
             q.append((now, amount))
 
+    def busy_reasons(self) -> list[str]:
+        """What a restart would lose right now (empty list = safe to restart).
+        Drafts untouched for DRAFT_ACTIVE_SECONDS count as abandoned: a sleeping
+        container would have wiped them anyway."""
+        now = time.time()
+        reasons = []
+        with self.lock:
+            if any(j.status not in ("done", "failed") for j in self.jobs.values()):
+                reasons.append("render")
+            if any(now - u["active"] < UPLOAD_IDLE_SECONDS for u in self.uploads.values()):
+                reasons.append("upload")
+        for d in self.results.iterdir():
+            job = self.load_job(d.name)
+            if job and job.status == "done" and (job.expires_at or 0) > now:
+                reasons.append("reels")
+                break
+        for d in self.projects.iterdir():
+            meta = d / "project.json"
+            try:
+                recent = now - meta.stat().st_mtime < DRAFT_ACTIVE_SECONDS
+                has_files = recent and bool(json.loads(meta.read_text(encoding="utf-8")).get("files"))
+            except (OSError, ValueError):
+                continue
+            if has_files:
+                reasons.append("draft")
+                break
+        return reasons
+
     def draft_bytes(self) -> int:
         """Bytes held by unrendered uploads across all projects (plus ones arriving)."""
         total = sum(u["size"] for u in self.uploads.values())
@@ -300,6 +331,15 @@ def create_app(data: Path, result_ttl_minutes: float = RESULT_TTL_MINUTES) -> Fa
                 "max_total_video_seconds": MAX_TOTAL_VIDEO_SECONDS,
                 "video_exts": sorted(VIDEO_EXTS),
                 "media_exts": sorted(MEDIA_EXTS), "audio_exts": sorted(AUDIO_EXTS)}
+
+    @app.get("/api/internal/status")
+    def internal_status(request: Request) -> dict:
+        """For the Cloudflare Worker: is it safe to restart onto a new version?
+        Answers only requests carrying the proxy secret (when one is configured)."""
+        if not _from_worker(request):
+            raise HTTPException(404, "not found")
+        busy = store.busy_reasons()
+        return {"idle": not busy, "busy": busy}
 
     @app.get("/api/songs")
     def search_songs(q: str) -> list[dict]:
@@ -622,6 +662,15 @@ def _apply_order(store: Store, pid: str, order: list[str]) -> None:
     m["files"] = arranged
     m["next"] = len(arranged)
     store.save_manifest(pid, m)
+
+
+def _from_worker(request: Request) -> bool:
+    """True if the request carries the Worker's proxy secret, or none is configured
+    (local runs)."""
+    secret = os.environ.get(PROXY_SECRET_ENV, "")
+    if not secret:
+        return True
+    return hmac.compare_digest(request.headers.get("x-reel-proxy-secret", ""), secret)
 
 
 def client_id(request: Request) -> str:

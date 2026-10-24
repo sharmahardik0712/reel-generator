@@ -7,6 +7,12 @@
  * There is exactly one container: uploads, the job queue and finished reels live on
  * its disk and in its memory. It sleeps after INACTIVITY_MINUTES without requests,
  * and sleeping wipes its disk, so that is set longer than the app's 20 minute reel TTL.
+ *
+ * Deploys: Cloudflare doesn't replace a running Durable Object container when a new
+ * image is deployed. So the object remembers which image it started the container
+ * with; when that differs from the current image, an alarm asks the app every minute
+ * whether anything is in use (a render, an upload, unexpired reels, an active draft)
+ * and restarts onto the new image as soon as nothing would be lost.
  */
 import { DurableObject } from "cloudflare:workers";
 
@@ -15,6 +21,10 @@ const PORT = 8080;
 const INACTIVITY_MINUTES = 30;
 // 4 vCPU / 12 GiB / 20 GB disk: the largest predefined type, for fast renders.
 const INSTANCE = "standard-4";
+// CI calls this after each deploy so the switch-over starts without waiting for a visitor.
+const DEPLOY_CHECK_PATH = "/__reel/deploy-check";
+const UPGRADE_CHECK_EVERY_MS = 60 * 1000;
+const STARTED_IMAGE_KEY = "startedImage";
 
 interface Env {
 	REEL: DurableObjectNamespace<ReelContainer>;
@@ -38,13 +48,21 @@ export class ReelContainer extends DurableObject<Env> {
 	}
 
 	async fetch(request: Request): Promise<Response> {
+		const url = new URL(request.url);
+		if (url.pathname === DEPLOY_CHECK_PATH) {
+			// Never wakes a sleeping container: its next start uses the new image anyway.
+			const scheduled = await this.scheduleUpgradeCheck(0);
+			return new Response(scheduled ? "upgrade check scheduled\n" : "up to date\n");
+		}
+
 		// Share startup across concurrent requests, including after a failed attempt.
 		this.starting ??= this.startAndWaitForPort().finally(() => {
 			this.starting = undefined;
 		});
 		await this.starting;
+		// A visitor also triggers the check, in case the CI ping didn't arrive.
+		this.ctx.waitUntil(this.scheduleUpgradeCheck(5000));
 
-		const url = new URL(request.url);
 		url.protocol = "http:";
 		url.host = "container";
 		const forwarded = new Request(url, request);
@@ -62,6 +80,7 @@ export class ReelContainer extends DurableObject<Env> {
 				enableInternet: true,
 				env: { REEL_PROXY_SECRET: this.env.REEL_PROXY_SECRET ?? "" },
 			});
+			await this.ctx.storage.put(STARTED_IMAGE_KEY, container.images.base);
 		}
 		this.observeExit();
 		await container.setInactivityTimeout(INACTIVITY_MINUTES * 60 * 1000);
@@ -82,6 +101,64 @@ export class ReelContainer extends DurableObject<Env> {
 			await scheduler.wait(500);
 		}
 		throw new Error(`Reel Maker did not start listening on port ${PORT}`);
+	}
+
+	/** Runs on the alarm: restart onto the new image once nothing would be lost. */
+	async alarm(): Promise<void> {
+		if (!(await this.isOutdated())) return;
+		let busy: string[] = ["unknown"];
+		try {
+			const res = await this.ctx.container!.getTcpPort(PORT).fetch("http://container/api/internal/status", {
+				headers: { "X-Reel-Proxy-Secret": this.env.REEL_PROXY_SECRET ?? "" },
+				signal: AbortSignal.timeout(5000),
+			});
+			if (res.status === 404) {
+				// An app from before this endpoint existed: we can't tell whether it's in
+				// use, so don't restart it. Stop checking too, because the checks would
+				// keep it awake; once it sleeps, its next start uses the new image.
+				console.log("upgrade: running app predates the status check; letting it sleep");
+				return;
+			}
+			if (res.ok) busy = ((await res.json()) as { busy: string[] }).busy;
+		} catch (err) {
+			console.warn("upgrade check: status unavailable", err);
+		}
+		if (busy.length) {
+			console.log(`upgrade waiting; in use: ${busy.join(", ")}`);
+			await this.ctx.storage.setAlarm(Date.now() + UPGRADE_CHECK_EVERY_MS);
+			return;
+		}
+		console.log("upgrade: restarting the container onto the new image");
+		// Visitors arriving meanwhile wait on the same startup promise.
+		this.starting = this.restartOntoNewImage().finally(() => {
+			this.starting = undefined;
+		});
+		await this.starting;
+	}
+
+	private async restartOntoNewImage(): Promise<void> {
+		await this.ctx.container!.destroy();
+		await this.monitoring?.catch(() => {});
+		// Start right away so the next visitor finds it warm.
+		await this.startAndWaitForPort();
+	}
+
+	/** True when a container is running an image other than the current deploy's. */
+	private async isOutdated(): Promise<boolean> {
+		const container = this.ctx.container;
+		if (!container?.running) return false;
+		// No record means it was started before this tracking existed: treat as old.
+		const started = await this.ctx.storage.get<string>(STARTED_IMAGE_KEY);
+		return started !== container.images.base;
+	}
+
+	/** Schedules the upgrade check if one is due; returns whether it did. */
+	private async scheduleUpgradeCheck(delayMs: number): Promise<boolean> {
+		if (!(await this.isOutdated())) return false;
+		if ((await this.ctx.storage.getAlarm()) === null) {
+			await this.ctx.storage.setAlarm(Date.now() + delayMs);
+		}
+		return true;
 	}
 
 	private observeExit(): void {
