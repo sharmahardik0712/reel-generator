@@ -14,6 +14,7 @@ One render runs at a time; others wait in a queue.
 
 from __future__ import annotations
 
+import asyncio
 import collections
 import hmac
 import json
@@ -35,26 +36,45 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from . import songs
-from .pipeline import MAX_FILES, list_media, make_variants, prepare
+from .pipeline import (MAX_FILES, MAX_TOTAL_VIDEO_SECONDS, MAX_VIDEO_SECONDS, list_media,
+                       make_variants, prepare)
+from .probe import UnsupportedMedia, probe_file
 from .planner import presets
 
 log = logging.getLogger(__name__)
 
-PROJECT_TTL_HOURS = 24
+MB = 1024 * 1024
+GB = 1024 * MB
+PROJECT_TTL_HOURS = 2  # unrendered drafts
 RESULT_TTL_MINUTES = 20
 WORK_TTL_HOURS = 6  # orphaned work dirs (e.g. after a crash)
 CLEANUP_EVERY_SECONDS = 2 * 60  # expired reels already answer 410; this frees disk
-MAX_UPLOAD_BYTES = 500 * 1024 * 1024
-MAX_PROJECT_BYTES = 3 * 1024 * 1024 * 1024
-MAX_SONG_BYTES = 50 * 1024 * 1024
+
+# Limits that stop one visitor from filling the disk or hogging the renderer.
+# Sized for family reels (7-60 s): generous for real use, tight for abuse.
+MAX_PHOTO_BYTES = 30 * MB
+MAX_VIDEO_BYTES = 400 * MB  # about a minute of 4K from a phone
+MAX_UPLOAD_BYTES = MAX_VIDEO_BYTES
+MAX_PROJECT_BYTES = 2 * GB  # one reel's uploads
+MAX_SONG_BYTES = 50 * MB
+MAX_DRAFT_BYTES = 8 * GB  # all unrendered uploads on the server together
+VIDEO_EXTS = {".mp4", ".mov", ".m4v"}
 CHUNK = 1024 * 1024
 # Uploads arrive in pieces so no single request exceeds Cloudflare's 100 MB limit.
-UPLOAD_CHUNK_BYTES = 8 * 1024 * 1024
-MIN_FREE_DISK_BYTES = 3 * 1024 ** 3
+UPLOAD_CHUNK_BYTES = 8 * MB
+MIN_FREE_DISK_BYTES = 3 * GB
 
 # Per-visitor limits: the public site has no login, so keep strangers from tying up
-# this PC. A visitor is the client IP the Cloudflare Worker reports (see client_id).
-LIMITS = {"render": (6, 3600), "project": (30, 3600), "upload": (400, 3600)}
+# the renderer or the disk. A visitor is the client IP the Cloudflare Worker reports
+# (see client_id). Each action has one or more (amount, window seconds) budgets.
+LIMITS = {
+    "render": [(6, 3600), (20, 86400)],
+    "project": [(10, 3600)],
+    "upload": [(300, 3600)],  # files started
+    "upload_bytes": [(2 * GB, 3600), (6 * GB, 86400)],
+}
+LIMIT_WORDS = {"render": "reels", "project": "new reels", "upload": "uploads",
+               "upload_bytes": "data"}
 MAX_QUEUED_JOBS = 8
 # A pending upload with no new piece for this long was abandoned (tab closed, network
 # gone). It no longer blocks rendering and is discarded when a render starts.
@@ -135,18 +155,39 @@ class Store:
             {"id": pid, "created_at": time.time(), "files": [], "song": None, "next": 0}))
         return pid
 
-    def allow(self, client: str, action: str) -> None:
-        """Sliding-window rate limit; raises 429 when the visitor is over the limit."""
-        count, window = LIMITS[action]
+    def allow(self, client: str, action: str, amount: int = 1) -> None:
+        """Sliding-window budgets per visitor; raises 429 when one would be exceeded.
+        `amount` is 1 for counted actions and the byte size for "upload_bytes"."""
         now = time.time()
         with self.lock:
             q = self.hits.setdefault((client, action), collections.deque())
-            while q and q[0] < now - window:
+            longest = max(window for _, window in LIMITS[action])
+            while q and q[0][0] < now - longest:
                 q.popleft()
-            if len(q) >= count:
-                wait = int(q[0] + window - now) // 60 + 1
-                raise HTTPException(429, f"Too many {action}s from you; try again in {wait} min.")
-            q.append(now)
+            for limit, window in LIMITS[action]:
+                recent = [(t, n) for t, n in q if t >= now - window]
+                if sum(n for _, n in recent) + amount > limit:
+                    wait = _wait_text(recent[0][0] + window - now if recent else window)
+                    period = "hour" if window <= 3600 else "day"
+                    if action == "upload_bytes":
+                        msg = (f"You've uploaded a lot recently: the limit is {limit // GB} GB per "
+                               f"{period}. Try again in {wait}.")
+                    else:
+                        msg = (f"Too many {LIMIT_WORDS[action]} from you (limit {limit} per "
+                               f"{period}). Try again in {wait}.")
+                    raise HTTPException(429, msg)
+            q.append((now, amount))
+
+    def draft_bytes(self) -> int:
+        """Bytes held by unrendered uploads across all projects (plus ones arriving)."""
+        total = sum(u["size"] for u in self.uploads.values())
+        for d in self.projects.iterdir():
+            try:
+                m = json.loads((d / "project.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            total += sum(f.get("size", 0) for f in m.get("files", []))
+        return total
 
     # jobs
     def save_job(self, job: Job) -> None:
@@ -253,7 +294,11 @@ def create_app(data: Path, result_ttl_minutes: float = RESULT_TTL_MINUTES) -> Fa
     @app.get("/api/config")
     def config() -> dict:
         return {"presets": PRESETS, "max_files": MAX_FILES, "chunk_bytes": UPLOAD_CHUNK_BYTES,
-                "max_upload_mb": MAX_UPLOAD_BYTES // 2**20,
+                "max_upload_mb": MAX_UPLOAD_BYTES // MB,
+                "max_photo_mb": MAX_PHOTO_BYTES // MB, "max_video_mb": MAX_VIDEO_BYTES // MB,
+                "max_video_seconds": MAX_VIDEO_SECONDS,
+                "max_total_video_seconds": MAX_TOTAL_VIDEO_SECONDS,
+                "video_exts": sorted(VIDEO_EXTS),
                 "media_exts": sorted(MEDIA_EXTS), "audio_exts": sorted(AUDIO_EXTS)}
 
     @app.get("/api/songs")
@@ -281,14 +326,10 @@ def create_app(data: Path, result_ttl_minutes: float = RESULT_TTL_MINUTES) -> Fa
     def start_upload(pid: str, body: UploadIn, request: Request) -> dict:
         """Begin a chunked upload: the browser then PUTs UPLOAD_CHUNK_BYTES pieces."""
         store.project_dir(pid)
-        store.allow(client_id(request), "upload")
         ext = Path(body.name).suffix.lower()
-        if ext not in MEDIA_EXTS:
-            raise HTTPException(415, f"{body.name}: unsupported file type")
-        if body.size > MAX_UPLOAD_BYTES:
-            raise HTTPException(413, f"{body.name}: larger than {MAX_UPLOAD_BYTES // 2**20} MB")
-        if shutil.disk_usage(store.data).free < MIN_FREE_DISK_BYTES + body.size:
-            raise HTTPException(507, "the server is low on disk space; try again later")
+        _check_new_file(store, body.name, ext, body.size)
+        visitor = client_id(request)
+        store.allow(visitor, "upload")
         with store.project_locks[pid]:
             m = store.manifest(pid)
             pending = [u for u in store.uploads.values() if u["pid"] == pid]
@@ -296,7 +337,9 @@ def create_app(data: Path, result_ttl_minutes: float = RESULT_TTL_MINUTES) -> Fa
                 raise HTTPException(413, f"at most {MAX_FILES} files per reel")
             used = sum(f["size"] for f in m["files"]) + sum(u["size"] for u in pending)
             if used + body.size > MAX_PROJECT_BYTES:
-                raise HTTPException(413, f"at most {MAX_PROJECT_BYTES // 2**30} GB per reel")
+                raise HTTPException(413, f"at most {MAX_PROJECT_BYTES // GB} GB per reel")
+            # Counted when the upload starts, so cancelled uploads still count.
+            store.allow(visitor, "upload_bytes", body.size)
             uid = uuid.uuid4().hex
             chunks = -(-body.size // UPLOAD_CHUNK_BYTES)
             store.uploads[uid] = {"pid": pid, "name": _display_name(body.name), "ext": ext,
@@ -347,41 +390,36 @@ def create_app(data: Path, result_ttl_minutes: float = RESULT_TTL_MINUTES) -> Fa
         missing = up["chunks"] - len(up["received"])
         if missing:
             raise HTTPException(400, f"{missing} piece(s) still missing")
-        d = store.project_dir(pid)
-        with store.project_locks[pid]:
-            m = store.manifest(pid)
-            fid = uuid.uuid4().hex[:12]
-            stored = f"{m['next']:04d}_{fid}{up['ext']}"
-            (d / "media" / f"{uid}.part").replace(d / "media" / stored)
-            entry = {"id": fid, "name": up["name"], "stored": stored, "size": up["size"]}
-            m["files"].append(entry)
-            m["next"] += 1
-            store.save_manifest(pid, m)
+        part = store.project_dir(pid) / "media" / f"{uid}.part"
+        try:
+            return _add_media(store, pid, part, up["name"], up["ext"], up["size"])
+        finally:
             store.uploads.pop(uid, None)
-        return entry
 
     @app.post("/api/projects/{pid}/files")
-    async def upload_file(pid: str, file: UploadFile = File(...)) -> dict:
-        """Single-request upload (CLI/scripts). The web page uses chunked uploads."""
+    async def upload_file(pid: str, request: Request, file: UploadFile = File(...)) -> dict:
+        """Single-request upload (CLI/scripts); same limits as the page's chunked uploads."""
         d = store.project_dir(pid)
-        ext = Path(file.filename or "").suffix.lower()
-        if ext not in MEDIA_EXTS:
-            raise HTTPException(415, f"{file.filename}: unsupported file type")
+        name = _display_name(file.filename)
+        ext = Path(name).suffix.lower()
+        size_hint = file.size or 0
+        _check_new_file(store, name, ext, size_hint)
+        visitor = client_id(request)
+        store.allow(visitor, "upload")
         m = store.manifest(pid)
         if len(m["files"]) >= MAX_FILES:
             raise HTTPException(413, f"at most {MAX_FILES} files per reel")
         used = sum(f["size"] for f in m["files"])
-        fid = uuid.uuid4().hex[:12]
-        # Stored name is generated; the user's filename is only kept for display.
-        stored = f"{m['next']:04d}_{fid}{ext}"
-        size = await _save_upload(file, d / "media" / stored,
-                                  min(MAX_UPLOAD_BYTES, MAX_PROJECT_BYTES - used))
-        m = store.manifest(pid)
-        entry = {"id": fid, "name": _display_name(file.filename), "stored": stored, "size": size}
-        m["files"].append(entry)
-        m["next"] += 1
-        store.save_manifest(pid, m)
-        return entry
+        limit = min(MAX_VIDEO_BYTES if ext in VIDEO_EXTS else MAX_PHOTO_BYTES,
+                    MAX_PROJECT_BYTES - used)
+        tmp = d / "media" / f"{uuid.uuid4().hex}.part"
+        size = await _save_upload(file, tmp, limit)
+        try:
+            store.allow(visitor, "upload_bytes", size)
+        except HTTPException:
+            tmp.unlink(missing_ok=True)
+            raise
+        return await asyncio.to_thread(_add_media, store, pid, tmp, name, ext, size)
 
     @app.get("/api/projects/{pid}/files/{fid}/thumb")
     def thumb(pid: str, fid: str):
@@ -429,14 +467,17 @@ def create_app(data: Path, result_ttl_minutes: float = RESULT_TTL_MINUTES) -> Fa
         return m["song"]
 
     @app.post("/api/projects/{pid}/song/upload")
-    async def upload_song(pid: str, file: UploadFile = File(...)) -> dict:
+    async def upload_song(pid: str, request: Request, file: UploadFile = File(...)) -> dict:
         d = store.project_dir(pid)
         ext = Path(file.filename or "").suffix.lower()
         if ext not in AUDIO_EXTS:
             raise HTTPException(415, "use an MP3, M4A, AAC or WAV file")
+        visitor = client_id(request)
+        store.allow(visitor, "upload")
         _clear(d / "song")
         stored = f"song{ext}"
-        await _save_upload(file, d / "song" / stored, MAX_SONG_BYTES)
+        size = await _save_upload(file, d / "song" / stored, MAX_SONG_BYTES)
+        store.allow(visitor, "upload_bytes", size)
         m = store.manifest(pid)
         m["song"] = {"kind": "upload", "stored": stored, "title": _display_name(file.filename),
                      "artist": "", "artwork": ""}
@@ -604,6 +645,67 @@ def _discard_upload(store: "Store", uid: str, pid: str) -> None:
             (store.projects / pid / "media" / f"{uid}.part").unlink(missing_ok=True)
         except OSError:
             pass  # a piece is still being written (Windows); the project cleanup removes it
+
+
+def _check_new_file(store: "Store", name: str, ext: str, size: int) -> None:
+    """Cheap checks before accepting any bytes: type, size, server capacity."""
+    if ext not in MEDIA_EXTS:
+        raise HTTPException(415, f"{name}: unsupported file type")
+    is_video = ext in VIDEO_EXTS
+    limit = MAX_VIDEO_BYTES if is_video else MAX_PHOTO_BYTES
+    if size > limit:
+        raise HTTPException(413, f"{name} is {size / MB:.0f} MB; "
+                                 f"{'videos' if is_video else 'photos'} can be up to {limit // MB} MB")
+    if store.draft_bytes() + size > MAX_DRAFT_BYTES:
+        raise HTTPException(503, "Lots of uploads are in progress right now. Try again in a few minutes.")
+    if shutil.disk_usage(store.data).free < MIN_FREE_DISK_BYTES + size:
+        raise HTTPException(507, "The server is low on disk space. Try again later.")
+
+
+def _add_media(store: "Store", pid: str, src: Path, name: str, ext: str, size: int) -> dict:
+    """Check a fully received file and add it to the project, or delete it and say why.
+    Catches what the size check can't: unreadable files and too-long videos."""
+    def reject(status: int, msg: str):
+        src.unlink(missing_ok=True)
+        raise HTTPException(status, msg)
+
+    try:
+        info = probe_file(src)
+    except UnsupportedMedia as e:
+        reject(415, str(e).replace(src.name, name))
+    if info.kind == "audio":
+        reject(415, f"{name} is an audio file; add it as the song instead")
+    duration = round(info.duration, 2) if info.kind == "video" else 0.0
+    if duration > MAX_VIDEO_SECONDS:
+        reject(413, f"{name} is {_mmss(duration)} long; videos can be up to "
+                    f"{_mmss(MAX_VIDEO_SECONDS)}. Trim it on your phone first.")
+    d = store.project_dir(pid)
+    with store.project_locks[pid]:
+        m = store.manifest(pid)
+        video_total = sum(f.get("duration", 0) for f in m["files"]) + duration
+        if duration and video_total > MAX_TOTAL_VIDEO_SECONDS:
+            reject(413, f"{name} would make {_mmss(video_total)} of video in this reel; "
+                        f"the limit is {_mmss(MAX_TOTAL_VIDEO_SECONDS)}.")
+        fid = uuid.uuid4().hex[:12]
+        # Stored name is generated; the user's filename is only kept for display.
+        stored = f"{m['next']:04d}_{fid}{ext}"
+        src.replace(d / "media" / stored)
+        entry = {"id": fid, "name": name, "stored": stored, "size": size,
+                 "kind": info.kind, "duration": duration}
+        m["files"].append(entry)
+        m["next"] += 1
+        store.save_manifest(pid, m)
+    return entry
+
+
+def _mmss(seconds: float) -> str:
+    s = int(round(seconds))
+    return f"{s // 60}:{s % 60:02d}"
+
+
+def _wait_text(seconds: float) -> str:
+    minutes = max(1, int(seconds // 60) + 1)
+    return f"{minutes} min" if minutes < 120 else f"{round(minutes / 60)} hours"
 
 
 def _pending_upload(store: "Store", pid: str, uid: str) -> dict:

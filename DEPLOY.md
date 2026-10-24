@@ -16,8 +16,17 @@ Phone ──https──► makemyreel.in ──► Worker ──► one containe
 - Needs the **Workers Paid** plan ($5/month). Usage beyond the included amount is
   billed by Cloudflare; see "Cost" below.
 - Your PC can be off. GitHub Actions builds and deploys on every push to `main`.
-- Same app, same limits: anyone with the link can use it, 6 renders/hour per visitor,
-  at most 8 renders waiting. Uploads are deleted after rendering, reels after 20 minutes.
+- Anyone with the link can use it, within these limits (constants at the top of
+  `engine/reel_engine/webapp.py` and `pipeline.py`):
+  - **Per file:** photos up to 30 MB and 60 megapixels; videos up to 400 MB and 3 minutes.
+  - **Per reel:** up to 30 files, 2 GB, and 5 minutes of video in total.
+  - **Per visitor (IP):** 2 GB of uploads per hour and 6 GB per day; 10 new reels
+    per hour; 6 renders per hour and 20 per day.
+  - **Whole site:** at most 8 GB of unrendered uploads and 8 renders waiting; uploads
+    are refused when the disk is nearly full.
+  - Files are checked as soon as they arrive (unreadable files and too-long videos
+    are refused right away), and the page checks size and video length before uploading.
+- Uploads are deleted after rendering (unrendered drafts after 2 hours), reels after 20 minutes.
 - **One container holds everything** (uploads, the queue, reels). It sleeps after
   30 minutes with no visitors, and **sleeping wipes its disk**, so a reel can't
   outlive that. The first visit after a sleep shows "Reel Maker is starting" for
@@ -70,9 +79,8 @@ Phone ──https──► reel-home.<you>.workers.dev ──Workers VPC──�
 
 - Costs nothing: Workers Free, Workers VPC (free while in beta), Cloudflare Tunnel.
 - No domain needed. Your PC's address stays hidden and no router ports are opened.
-- **Anyone with the link can use it.** The app limits each visitor (6 renders/hour,
-  30 new projects/hour, 400 upload requests/hour), keeps at most 8 renders waiting,
-  and refuses uploads when the disk is nearly full.
+- **Anyone with the link can use it,** within the same per-file, per-reel, per-visitor
+  and site-wide limits as option A above.
 - The PC must be on and awake. When it's off, visitors see "Reel Maker is offline".
 
 ### 1. Prepare the PC (once)

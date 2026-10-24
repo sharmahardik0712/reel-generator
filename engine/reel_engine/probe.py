@@ -23,6 +23,9 @@ VIDEO_CODECS = {"h264", "hevc", "vp9", "av1", "mpeg4", "prores"}
 IMAGE_CODECS = {"mjpeg", "png", "webp", "bmp", "tiff", "gif", "jpeg2000"}
 
 MAX_FILE_BYTES = 500 * 1024 * 1024
+# 60 MP covers every phone camera (iPhone 48 MP); bigger is likely a decompression bomb.
+MAX_PHOTO_PIXELS = 60_000_000
+Image.MAX_IMAGE_PIXELS = MAX_PHOTO_PIXELS  # Pillow refuses to open anything over 2x this
 
 
 class UnsupportedMedia(ValueError):
@@ -90,8 +93,14 @@ def _try_photo(path: Path, digest: str) -> MediaInfo | None:
             if exif.get(ExifTags.Base.Orientation, 1) in (5, 6, 7, 8):
                 w, h = h, w
             when, reliable = _photo_capture_time(exif)
+    except Image.DecompressionBombError as e:
+        raise UnsupportedMedia(f"{path.name} has too many pixels to be a normal photo") from e
     except (OSError, SyntaxError, ValueError):
         return None
+    if w * h > MAX_PHOTO_PIXELS:
+        raise UnsupportedMedia(
+            f"{path.name} is {w * h / 1e6:.0f} megapixels; photos can be up to "
+            f"{MAX_PHOTO_PIXELS // 1_000_000} megapixels")
     return MediaInfo(
         path=str(path), content_hash=digest, kind="photo", width=w, height=h,
         capture_time=when, capture_time_reliable=reliable,

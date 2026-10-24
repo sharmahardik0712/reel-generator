@@ -1,9 +1,24 @@
+import io
 import time
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from reel_engine.webapp import create_app
+
+
+def jpeg(seed: int = 0, size: tuple[int, int] = (64, 48)) -> bytes:
+    """A small real JPEG (the server now checks every file it receives)."""
+    buf = io.BytesIO()
+    Image.new("RGB", size, ((seed * 70) % 256, 120, 200)).save(buf, "JPEG")
+    return buf.getvalue()
+
+
+def add_photo(client, pid, name="a.jpg", seed=0):
+    r = client.post(f"/api/projects/{pid}/files", files={"file": (name, jpeg(seed), "image/jpeg")})
+    assert r.status_code == 200, r.text
+    return r.json()
 
 
 @pytest.fixture
@@ -32,8 +47,8 @@ def test_rejects_bad_ids_and_types(client):
 
 def test_upload_delete_and_order(client):
     pid = client.post("/api/projects").json()["id"]
-    a = client.post(f"/api/projects/{pid}/files", files={"file": ("a.jpg", b"\xff\xd8x", "image/jpeg")}).json()
-    b = client.post(f"/api/projects/{pid}/files", files={"file": ("b.jpg", b"\xff\xd8y", "image/jpeg")}).json()
+    a = add_photo(client, pid, "a.jpg", 1)
+    b = add_photo(client, pid, "b.jpg", 2)
     assert a["name"] == "a.jpg" and a["stored"] != "a.jpg"
     client.delete(f"/api/projects/{pid}/files/{a['id']}")
     files = client.get(f"/api/projects/{pid}").json()["files"]
@@ -95,9 +110,12 @@ def test_full_flow(client, media_dir, song_file):
     assert restarted.get(f"/api/jobs/{job_id}").status_code == 404
 
 
+@pytest.mark.ffmpeg
 def test_failed_render_keeps_uploads_for_retry(client):
     pid = client.post("/api/projects").json()["id"]
-    client.post(f"/api/projects/{pid}/files", files={"file": ("bad.jpg", b"\xff\xd8 junk", "image/jpeg")})
+    add_photo(client, pid)
+    # A broken song makes the render fail after the photo is prepared.
+    client.post(f"/api/projects/{pid}/song/upload", files={"file": ("s.mp3", b"ID3 not audio", "audio/mpeg")})
     job_id = client.post(f"/api/projects/{pid}/render", json={"length": 7}).json()["job_id"]
     deadline = time.time() + 60
     while (job := client.get(f"/api/jobs/{job_id}").json())["status"] not in ("done", "failed"):
@@ -138,18 +156,18 @@ def test_chunked_upload_any_order_and_retry(client, monkeypatch):
     from reel_engine import webapp
     monkeypatch.setattr(webapp, "UPLOAD_CHUNK_BYTES", 10)
     pid = client.post("/api/projects").json()["id"]
-    data = bytes(range(256)) * 1  # 256 bytes -> 26 chunks of 10
-    init = client.post(f"/api/projects/{pid}/uploads", json={"name": "clip.MOV", "size": len(data)}).json()
-    assert init["chunks"] == 26
+    data = jpeg(3)
+    chunks = -(-len(data) // 10)
+    init = client.post(f"/api/projects/{pid}/uploads", json={"name": "photo.JPG", "size": len(data)}).json()
+    assert init["chunks"] == chunks
     url = f"/api/projects/{pid}/uploads/{init['upload_id']}"
-    order = list(range(26))[::-1]
-    for i in order:
+    for i in reversed(range(chunks)):
         assert client.put(f"{url}/{i}", content=data[i * 10:(i + 1) * 10]).status_code == 200
     assert client.put(f"{url}/3", content=data[30:40]).status_code == 200  # a retry is harmless
     assert client.put(f"{url}/0", content=b"short").status_code == 400
     assert client.put(f"{url}/99", content=b"x").status_code == 400
     entry = client.post(f"{url}/complete").json()
-    assert entry["name"] == "clip.MOV" and entry["size"] == 256
+    assert entry["name"] == "photo.JPG" and entry["size"] == len(data) and entry["kind"] == "photo"
     stored = client.app.state.store.project_dir(pid) / "media" / entry["stored"]
     assert stored.read_bytes() == data
 
@@ -163,11 +181,13 @@ def test_incomplete_upload_is_refused(client):
     assert client.post(f"/api/projects/{pid}/uploads", json={"name": "a.exe", "size": 5}).status_code == 415
     assert client.post(f"/api/projects/{pid}/uploads",
                        json={"name": "a.mp4", "size": 600 * 2**20}).status_code == 413
+    big_photo = client.post(f"/api/projects/{pid}/uploads", json={"name": "a.jpg", "size": 50 * 2**20})
+    assert big_photo.status_code == 413 and "photos can be up to 30 MB" in big_photo.json()["detail"]
 
 
 def test_visitor_limits_use_worker_header_only_with_secret(client, monkeypatch):
     from reel_engine import webapp
-    monkeypatch.setattr(webapp, "LIMITS", {**webapp.LIMITS, "project": (2, 3600)})
+    monkeypatch.setattr(webapp, "LIMITS", {**webapp.LIMITS, "project": [(2, 3600)]})
     monkeypatch.setenv("REEL_PROXY_SECRET", "s3cret")
     good = {"x-reel-proxy-secret": "s3cret"}
     for _ in range(2):
@@ -189,7 +209,7 @@ def test_visitor_limits_use_worker_header_only_with_secret(client, monkeypatch):
 ])
 def test_reel_length_depends_on_song_source(client, kind, asked, expected):
     pid = client.post("/api/projects").json()["id"]
-    client.post(f"/api/projects/{pid}/files", files={"file": ("a.jpg", b"\xff\xd8 junk", "image/jpeg")})
+    add_photo(client, pid)
     store = client.app.state.store
     m = store.manifest(pid)
     m["song"] = {"kind": kind, "stored": "song.m4a", "title": "t", "artist": "a", "artwork": ""}
@@ -200,7 +220,7 @@ def test_reel_length_depends_on_song_source(client, kind, asked, expected):
 
 def test_cancelled_upload_does_not_block_rendering(client):
     pid = client.post("/api/projects").json()["id"]
-    client.post(f"/api/projects/{pid}/files", files={"file": ("a.jpg", b"\xff\xd8 junk", "image/jpeg")})
+    add_photo(client, pid)
     init = client.post(f"/api/projects/{pid}/uploads", json={"name": "big.mov", "size": 20}).json()
     url = f"/api/projects/{pid}/uploads/{init['upload_id']}"
     client.put(f"{url}/0", content=b"x" * 20)
@@ -218,9 +238,67 @@ def test_cancelled_upload_does_not_block_rendering(client):
 
 def test_abandoned_upload_stops_blocking_after_idle_time(client):
     pid = client.post("/api/projects").json()["id"]
-    client.post(f"/api/projects/{pid}/files", files={"file": ("a.jpg", b"\xff\xd8 junk", "image/jpeg")})
+    add_photo(client, pid)
     init = client.post(f"/api/projects/{pid}/uploads", json={"name": "big.mov", "size": 20}).json()
     store = client.app.state.store
     store.uploads[init["upload_id"]]["active"] -= 11 * 60  # tab closed 11 minutes ago
     assert client.post(f"/api/projects/{pid}/render", json={"length": 7}).status_code == 200
     assert init["upload_id"] not in store.uploads
+
+
+
+def test_unreadable_and_oversized_photos_are_refused_on_arrival(client, monkeypatch):
+    from reel_engine import probe
+    pid = client.post("/api/projects").json()["id"]
+    r = client.post(f"/api/projects/{pid}/files", files={"file": ("bad.jpg", b"\xff\xd8 junk", "image/jpeg")})
+    assert r.status_code == 415
+    monkeypatch.setattr(probe, "MAX_PHOTO_PIXELS", 1000)
+    r = client.post(f"/api/projects/{pid}/files", files={"file": ("huge.jpg", jpeg(), "image/jpeg")})
+    assert r.status_code == 415 and "megapixels" in r.json()["detail"]
+    assert client.get(f"/api/projects/{pid}").json()["files"] == []
+    media = client.app.state.store.project_dir(pid) / "media"
+    assert not list(media.iterdir())  # rejected files don't stay on disk
+
+
+def test_upload_data_budget_per_visitor(client, monkeypatch):
+    from reel_engine import webapp
+    monkeypatch.setattr(webapp, "LIMITS", {**webapp.LIMITS, "upload_bytes": [(100, 3600)]})
+    pid = client.post("/api/projects").json()["id"]
+    assert client.post(f"/api/projects/{pid}/uploads", json={"name": "a.jpg", "size": 60}).status_code == 200
+    r = client.post(f"/api/projects/{pid}/uploads", json={"name": "b.jpg", "size": 60})
+    assert r.status_code == 429 and "uploaded a lot" in r.json()["detail"]
+
+
+def test_server_wide_draft_cap(client, monkeypatch):
+    from reel_engine import webapp
+    monkeypatch.setattr(webapp, "MAX_DRAFT_BYTES", 1000)
+    pid = client.post("/api/projects").json()["id"]
+    assert client.post(f"/api/projects/{pid}/uploads", json={"name": "a.jpg", "size": 600}).status_code == 200
+    r = client.post(f"/api/projects/{pid}/uploads", json={"name": "b.jpg", "size": 600})
+    assert r.status_code == 503
+
+
+def test_config_reports_limits(client):
+    cfg = client.get("/api/config").json()
+    assert cfg["max_files"] == 30 and cfg["max_video_seconds"] == 180
+    assert cfg["max_total_video_seconds"] == 300 and cfg["max_photo_mb"] == 30
+
+
+@pytest.mark.ffmpeg
+def test_long_videos_are_refused_on_arrival(client, media_dir, monkeypatch):
+    from reel_engine import webapp
+    monkeypatch.setattr(webapp, "MAX_VIDEO_SECONDS", 5.5)
+    monkeypatch.setattr(webapp, "MAX_TOTAL_VIDEO_SECONDS", 8)
+    pid = client.post("/api/projects").json()["id"]
+
+    def send(name):
+        return client.post(f"/api/projects/{pid}/files",
+                           files={"file": (name, (media_dir / name).read_bytes(), "video/mp4")})
+
+    too_long = send("06_portrait.mp4")  # 6 s > 5.5 s
+    assert too_long.status_code == 413 and "Trim it" in too_long.json()["detail"]
+    ok = send("07_zoom.mov")  # 5 s
+    assert ok.status_code == 200 and ok.json()["duration"] == pytest.approx(5, abs=0.2)
+    over_total = send("08_rotated.mp4")  # +4 s = 9 s > 8 s
+    assert over_total.status_code == 413 and "in this reel" in over_total.json()["detail"]
+    assert [f["name"] for f in client.get(f"/api/projects/{pid}").json()["files"]] == ["07_zoom.mov"]

@@ -22,9 +22,11 @@
     <div class="drop" id="drop">
       <button class="primary" id="pickBtn" type="button">＋ Add photos &amp; videos</button>
       <p class="muted">or drag them here · JPG, PNG, HEIC, MP4, MOV</p>
+      <p class="muted" id="limitsNote" style="margin-top:4px"></p>
       <input type="file" id="fileInput" multiple accept="image/*,video/*,.heic,.heif,.mov" hidden>
     </div>
     <div class="grid" id="grid"></div>
+    <ul class="notes" id="uploadNotes"></ul>
     <p class="muted hidden" id="orderTip">Drag tiles to reorder. Order is used when photos have no date.</p>
     <p class="muted" style="margin:10px 0 0">🔒 Your uploads are deleted as soon as your reels are made.</p>
   </section>
@@ -126,6 +128,9 @@
   const grid = $("grid");
   function renderGrid() {
     grid.replaceChildren(...state.files.map(tileFor));
+    $("uploadNotes").replaceChildren(...state.files.filter((f) => f.status === "error")
+      .map((f) => el("li", { class: "error" },
+        String(f.error).startsWith(f.name) ? f.error : `${f.name}: ${f.error}`)));
     show($("orderTip"), state.files.length > 1);
     updateGenerate();
   }
@@ -165,16 +170,26 @@
     return tile;
   }
 
+  // Check what the server would refuse before sending anything (the server checks again).
   async function addFiles(list) {
     $("genError").textContent = ""; show($("genError"), false);
     const pid = await ensureProject();
-    const exts = state.config.media_exts;
+    const c = state.config;
     for (const file of list) {
       const ext = (file.name.match(/\.[^.]+$/) || [""])[0].toLowerCase();
-      const entry = { key: crypto.randomUUID(), name: file.name, url: URL.createObjectURL(file), status: "uploading", progress: 0 };
+      const isVideo = c.video_exts.includes(ext);
+      const entry = { key: crypto.randomUUID(), name: file.name, url: URL.createObjectURL(file),
+        status: "uploading", progress: 0, isVideo };
+      const kept = state.files.filter((f) => f.status !== "error").length;
       state.files.push(entry);
-      if (!exts.includes(ext)) { entry.status = "error"; entry.error = "unsupported file type"; continue; }
-      if (file.size > state.config.max_upload_mb * 1048576) { entry.status = "error"; entry.error = "file too large"; continue; }
+      const reject = (msg) => { entry.status = "error"; entry.error = msg; };
+      if (!c.media_exts.includes(ext)) { reject("not a photo or video type we support"); continue; }
+      if (kept >= c.max_files) { reject(`a reel can have up to ${c.max_files} files`); continue; }
+      const maxMb = isVideo ? c.max_video_mb : c.max_photo_mb;
+      if (file.size > maxMb * 1048576) {
+        reject(`${Math.round(file.size / 1048576)} MB; ${isVideo ? "videos" : "photos"} can be up to ${maxMb} MB`);
+        continue;
+      }
       uploadQueue.push(() => upload(pid, file, entry));
     }
     renderGrid();
@@ -196,6 +211,22 @@
   async function upload(pid, file, entry) {
     const fail = (msg) => { entry.status = "error"; entry.error = msg; renderGrid(); };
     if (entry.cancelled) return;
+    if (entry.isVideo) {
+      const c = state.config;
+      const secs = await videoDuration(file);  // null if this browser can't read it
+      if (entry.cancelled) return;
+      if (secs) {
+        if (secs > c.max_video_seconds) {
+          return fail(`${mmss(secs)} long; videos can be up to ${mmss(c.max_video_seconds)}. Trim it first.`);
+        }
+        const others = state.files.filter((f) => f !== entry && f.status !== "error")
+          .reduce((sum, f) => sum + (f.duration || 0), 0);
+        if (others + secs > c.max_total_video_seconds) {
+          return fail(`would make ${mmss(others + secs)} of video; a reel can have up to ${mmss(c.max_total_video_seconds)}`);
+        }
+        entry.duration = secs;
+      }
+    }
     let init;
     try {
       init = await api(`/api/projects/${pid}/uploads`, json({ name: file.name, size: file.size }));
@@ -227,6 +258,18 @@
       Object.assign(entry, done, { status: "done", progress: 1 });
     } catch (err) { return fail(err.message); }
     renderGrid();
+  }
+  function videoDuration(file) {
+    return new Promise((resolve) => {
+      const v = document.createElement("video");
+      const url = URL.createObjectURL(file);
+      const done = (d) => { clearTimeout(timer); URL.revokeObjectURL(url); resolve(d); };
+      const timer = setTimeout(() => done(null), 5000);
+      v.preload = "metadata";
+      v.onloadedmetadata = () => done(Number.isFinite(v.duration) ? v.duration : null);
+      v.onerror = () => done(null);
+      v.src = url;
+    });
   }
   function discardUpload(pid, entry) {
     if (!entry.uploadId) return;
@@ -419,6 +462,9 @@
   // ---------- start ----------
   (async () => {
     state.config = await api("/api/config");
+    const c = state.config;
+    $("limitsNote").textContent = `Up to ${c.max_files} files · photos up to ${c.max_photo_mb} MB · ` +
+      `videos up to ${mmss(c.max_video_seconds)} each, ${mmss(c.max_total_video_seconds)} in total`;
     const len = Number(storeGet("reel.length")); if ([7, 15, 30, 60].includes(len)) state.length = len;
     // "reel.styles" replaced "reel.presets" when the default became Cinematic only.
     const pr = storeGet("reel.styles");

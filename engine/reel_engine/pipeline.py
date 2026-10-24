@@ -20,8 +20,9 @@ from .songs import load_sidecar
 
 log = logging.getLogger(__name__)
 
-MAX_FILES = 60
-MAX_TOTAL_VIDEO_SECONDS = 600
+MAX_FILES = 30
+MAX_VIDEO_SECONDS = 180  # one clip
+MAX_TOTAL_VIDEO_SECONDS = 300  # all clips in one reel
 SKIP_SUFFIXES = {".json", ".txt", ".md", ".db", ".ini"}
 
 
