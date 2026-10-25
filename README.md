@@ -1,109 +1,151 @@
-# Family Reel Generator
+<div align="center">
 
-Turns a folder of phone photos and videos plus a song into short, beat-synced
-vertical reels (1080×1920, H.264/AAC) ready for Instagram. Deterministic, CPU only,
-no AI. See [docs/plan.md](docs/plan.md) for the full plan.
+# Reel Maker
 
-**Status:** Milestone 1 (CLI engine) is done. The Cloudflare backend (M3) and
-mobile web app (M4) aren't built yet.
+**Drop in whole phone videos and a song. Get back a reel cut to the beat.**
 
-## Setup (Windows)
+No trimming, no timeline, no AI. Just video and audio analysis with FFmpeg, OpenCV and librosa.
 
-```bash
-py -3.12 -m venv .venv
-.venv/Scripts/python -m pip install -e "engine[dev]"
-```
+[**Try it at makemyreel.in →**](https://makemyreel.in)
 
-FFmpeg: put `ffmpeg.exe` and `ffprobe.exe` in `tools/ffmpeg/` (the gyan.dev
-"essentials" build includes `zscale`, needed for HDR), or have them on `PATH`,
-or set `REEL_FFMPEG` / `REEL_FFPROBE`.
+[![Live site](https://img.shields.io/badge/live-makemyreel.in-cbbcf6)](https://makemyreel.in)
+[![Test and deploy](https://github.com/sharmahardik0712/reel-generator/actions/workflows/deploy.yml/badge.svg)](https://github.com/sharmahardik0712/reel-generator/actions/workflows/deploy.yml)
+[![Python 3.12](https://img.shields.io/badge/python-3.12-ffd8c2)](engine/pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-bfe6d3)](LICENSE)
 
-## Web app
+</div>
 
-```bash
-.venv/Scripts/reel ui
-```
+<table align="center">
+  <tr>
+    <td align="center"><img src="docs/media/demo.gif" width="240" alt="Demo: photos and clips in, beat-synced reel out"><br><sub>Demo (<a href="docs/media/demo.mp4">full video with sound</a>)</sub></td>
+    <td align="center"><img src="docs/media/editor-light.jpg" width="240" alt="The editor: add photos and videos"><br><sub>Add photos &amp; videos</sub></td>
+    <td align="center"><img src="docs/media/result.jpg" width="240" alt="The result page with the finished reel"><br><sub>Download your reel</sub></td>
+  </tr>
+</table>
 
-This opens http://localhost:8765. Add photos and videos, search for a song (YouTube
-link or name) or upload one, pick a length and styles, then **Make my reels**.
-That opens the result screen (`/r/<id>`): progress, then each reel with Download,
-Silent and Share buttons.
+## Why
 
-Storage is short-lived, the same way it will work on Cloudflare:
+Making a Reel usually means trimming every clip by hand and lining the cuts up with
+the music yourself. Reel Maker does that part: you add whole, untrimmed clips and it
+picks the moments and syncs them to the song.
 
-- **Uploads and the song** (`reel-data/projects/`) are deleted as soon as the reels
-  are made. If rendering fails they're kept, so you can go back and retry.
-- **Working files** (`reel-data/work/`) are deleted when each render ends.
-- **Finished reels** (`reel-data/results/`) stay downloadable for 20 minutes (`--keep-minutes N` to
-  change), or until you press *Delete these reels now*.
-- Drafts you never render are deleted after 24 hours. Cleanup runs at startup and
-  every 2 minutes.
+## What it does
 
-To put it on the internet, see [DEPLOY.md](DEPLOY.md) (Cloudflare Containers, or free with your PC doing the rendering).
-
-To use it from phones on the same Wi-Fi: `reel ui --host 0.0.0.0`, then open
-`http://<this PC's IP>:8765` on the phone. Anyone on that Wi-Fi can reach it, and
-Windows may ask to allow it through the firewall.
-
-## Command line
-
-Find a song from a YouTube link or a name. Nothing is downloaded from YouTube:
-the link is only used to read the title, and the audio is the official 30 s
-iTunes preview.
-
-```bash
-.venv/Scripts/reel song "https://www.youtube.com/watch?v=4NRXx6U8ABQ"
-```
-
-Make reels (all three presets, 15 s, song found automatically):
-
-```bash
-.venv/Scripts/reel make path/to/trip --song-search "blinding lights" --preset all --out out
-```
-
-Use your own audio file instead with `--song song.mp3`. Other options:
-`--length 7|15|30|60`, `--seed N` (shuffle), `--music-start SECONDS`, `--plan-only`
-(write EDLs without rendering). `reel render out/hype.edl.json` re-renders a saved plan.
-
-Each preset writes `<preset>.mp4` (with music), `<preset>-silent.mp4` (post this and
-add the song in Instagram so it isn't muted), `<preset>.edl.json`, and `README.txt`
-with the Instagram instructions and any notes.
+- **Picks the best moments** from long videos: sharp, well-lit and moving, skipping
+  blurry or shaky bits and near-duplicate photos.
+- **Cuts to the beat:** finds the song's tempo and bars, starts the music at its
+  liveliest part, and puts every cut on a beat.
+- **Opens strong:** the best shot goes first, then your moments in the order they happened.
+- **Handles phone media:** iPhone HEIC photos, HDR (HLG/Dolby Vision) video tone-mapped
+  to SDR, rotated and variable-frame-rate clips.
+- **Three styles:** Hype (fast cuts), Smooth and Cinematic (longer shots, gentle zooms).
+- **Songs from a YouTube link or a name:** the link is only used to read the title; the
+  audio is the official 30-second iTunes preview. Or upload your own audio file.
+- **Posts cleanly to Instagram:** you get the reel with music and a silent copy, so you
+  can add the same song inside Instagram without copyright muting.
+- **Private by default:** no account; uploads are deleted as soon as the reel is made,
+  and finished reels after 20 minutes.
 
 ## How it works
 
-`engine/reel_engine/`:
+```
+photos + videos ─► probe ─► proxies ─► analysis ─┐
+                   (HEIC, HDR→SDR,   (sharpness,    ├─► planner ─► edit list ─► render ─► reel.mp4
+song ────────────► beats, bars, energy  motion,      │   (pick, order,   (EDL)     (FFmpeg)    + silent copy
+                   (librosa)            duplicates) ─┘    time to beats)
+```
 
-| Module | Role |
+| Module (`engine/reel_engine/`) | Role |
 |---|---|
-| `probe.py` | Detect photo/video/audio from content; dimensions, rotation, HDR, capture time |
-| `proxy.py` | HEIC decode, sRGB, HDR→SDR tone-mapping, 30 fps CFR proxies; cached by content hash |
-| `analysis.py` | Sharpness, exposure, colorfulness/detail, motion, scene cuts, perceptual hash |
-| `music.py` | Beats, confidence + fixed-grid fallback, bars, energy, start point at the drop |
-| `songs.py` | YouTube oEmbed title → iTunes Search preview |
-| `planner.py` | Candidates → MMR selection (duplicates held back) → hook-first chronological order → beat-locked timing → EDL |
+| `probe.py` | Identify photos/videos/audio by content; size, rotation, HDR, capture time |
+| `proxy.py` | HEIC decode, sRGB, HDR→SDR tone-mapping, 30 fps working copies (cached by content hash) |
+| `analysis.py` | Sharpness, exposure, colour and detail, motion, scene cuts, perceptual hash |
+| `music.py` | Beat tracking with a confidence check and fixed-grid fallback, bars, energy, start point |
+| `songs.py` | YouTube link → title (oEmbed) → iTunes Search preview |
+| `planner.py` | Varied shot selection (duplicates held back), hook-first ordering, beat-locked timing → EDL |
 | `edl.py` | The edit-decision list format and its validator |
-| `render.py` | Per-clip render (cached, parallel), concat, loudness-normalized music, ffprobe validation |
-| `presets.yaml` | Pacing and scoring weights for hype / smooth / cinematic |
+| `render.py` | Parallel per-clip rendering, concat, loudness-normalized music, output checks |
+| `webapp.py` + `static/` | The web app: chunked uploads, limits, render queue, result pages |
+| `presets.yaml` | Pacing and scoring weights for Hype / Smooth / Cinematic |
+
+The planner is deterministic: the same media, settings and seed always give the same reel.
+
+## Run it locally
+
+You need **Python 3.12+** and **FFmpeg** (with `ffprobe`) on your `PATH`. On Windows you
+can instead put `ffmpeg.exe` and `ffprobe.exe` in `tools/ffmpeg/`; the gyan.dev
+"essentials" build includes `zscale`, which HDR tone-mapping needs.
+
+```bash
+python -m venv .venv
+.venv/Scripts/pip install -e "engine[dev]"     # macOS/Linux: .venv/bin/pip
+.venv/Scripts/reel ui                          # opens http://localhost:8765
+```
+
+### Command line
+
+```bash
+# find a song from a YouTube link or name, and download its 30 s preview
+reel song "https://www.youtube.com/watch?v=4NRXx6U8ABQ" --pick 1
+
+# make reels from a folder (all three styles, 15 s)
+reel make path/to/trip --song songs/The-Weeknd-Blinding-Lights.m4a --preset all --out out
+```
+
+Other options: `--song-search "artist - song"`, `--length 7|15|30|60`, `--seed N` (a
+different variation), `--plan-only` (write the edit list without rendering), and
+`reel render out/hype.edl.json` to re-render a saved plan.
+
+## Deploying
+
+[`DEPLOY.md`](DEPLOY.md) covers both options:
+
+- **Cloudflare Containers** (what makemyreel.in runs on): a Worker in front of one
+  container, deployed by GitHub Actions on every push to `main`, with safe switch-over
+  to new versions.
+- **Free, on your own PC:** a `workers.dev` address through Cloudflare Tunnel.
+
+The public site limits each visitor (uploads per hour and day, renders per hour), each
+reel (30 files, 5 minutes of video) and each file (photos 30 MB, videos 400 MB and 3 minutes).
 
 ## Tests
 
 ```bash
-.venv/Scripts/python -m pytest engine/tests            # everything (~2 min)
-.venv/Scripts/python -m pytest engine/tests -m "not ffmpeg and not network"   # fast unit tests
+.venv/Scripts/python -m pytest engine/tests                                    # everything (~4 min)
+.venv/Scripts/python -m pytest engine/tests -m "not ffmpeg and not network"    # fast unit tests
 ```
 
 The end-to-end tests generate phone-like media (HEIC, rotated video, HLG HDR HEVC,
-duplicates, a corrupt file) and a synthetic song with a drop. `tests/golden/` holds
-an EDL snapshot; after an intended planner change, regenerate with `UPDATE_GOLDEN=1`.
+duplicates, a corrupt file) and a synthetic song with a drop. `engine/tests/golden/`
+holds an edit-list snapshot; regenerate it with `UPDATE_GOLDEN=1` after an intended
+planner change.
 
-## Not done yet (next milestones)
+## Project layout
 
-- M2: crossfades/flash transitions, punch-ins, speed ramps, LUTs, saliency crop,
-  loopable ending, energy matching.
-- M0/M3: Cloudflare spike and backend (Workers, Access, R2, D1, Queues, Containers).
-- M4: mobile web app.
+```
+engine/                  Python package: the editing engine, CLI and web app
+  reel_engine/           probe, proxy, analysis, music, planner, render, webapp
+  tests/                 unit, end-to-end and web tests
+cloudflare-container/    Worker + container setup for makemyreel.in
+cloudflare/              Alternative: Worker for the free home-PC option
+scripts/                 Windows helpers (start on login, restart the live site)
+Dockerfile               The container image
+docs/                    Plan and README media
+```
+
+## Ideas and contributing
+
+Issues and pull requests are welcome. Things I'd like to add: letting one long video
+supply as many moments as the reel needs, transitions and speed ramps, and keeping
+finished reels in Cloudflare R2.
+
+Have a suggestion? Use the email link on [makemyreel.in](https://makemyreel.in), or open an issue.
+
+## Credits
+
+Demo footage and photos: free stock media from [Pexels](https://www.pexels.com).
+Demo music: "Upbeat" by prettyjohn1 on [Pixabay](https://pixabay.com/music/electro-upbeat-513865/).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
-
+[MIT](LICENSE) © 2026 Hardik Sharma
