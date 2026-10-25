@@ -102,3 +102,8 @@ an EDL snapshot; after an intended planner change, regenerate with `UPDATE_GOLDE
   loopable ending, energy matching.
 - M0/M3: Cloudflare spike and backend (Workers, Access, R2, D1, Queues, Containers).
 - M4: mobile web app.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
